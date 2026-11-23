@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 00 (APPROVED) — Next: 01 Foundation and local development  
-**Project status:** PHASE 00 APPROVED  
+**Current phase:** 01 — Foundation and local development  
+**Project status:** IN PROGRESS (Phase 01 Blocked on Environment Prerequisites)  
 **Approved by:** @ayjed  
 **Approval date:** 2026-11-23  
 **Last reviewed:** 2026-11-23  
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `main` tracking `origin/main` (`https://github.com/ayjed/SitePulse-Planning-Starter.git`)
+**Git tracking:** Branch `main` tracking `origin/main` (`https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -20,7 +20,7 @@
 | Phase | Objective | Status | Exit criteria |
 |---|---|---|---|
 | 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
-| 01 | Foundation and local development | NOT STARTED | clean scaffold, reproducible setup, tests/CI running |
+| 01 | Foundation and local development | BLOCKED | clean scaffold, reproducible setup, tests/CI running |
 | 02 | HTTP monitor engine and persistence | NOT STARTED | scheduled checks, history, security tests |
 | 03 | Accessible dashboard | NOT STARTED | responsive monitoring UI and E2E smoke check |
 | 04 | Alerts, TLS checks, hardening | NOT STARTED | alert deduplication, SSL checks, negative security tests |
@@ -28,7 +28,11 @@
 
 ## Current next actions
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
-- [ ] Phase 01: Scaffold approved Laravel 13 on PHP 8.3+ project.
+- [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
+- [x] Development environment audited (Blockers identified: PHP 8.2 installed vs PHP 8.3+ required; Composer missing).
+- [x] Non-destructive scaffolding plan designed.
+- [ ] Resolve environment blockers: Install PHP 8.3+ and Composer 2.7+.
+- [ ] Phase 01: Scaffold approved Laravel 13 project via non-destructive procedure.
 - [ ] Phase 01: Verify Composer dependency resolution (Pest 4, PHPUnit 12, Livewire 4).
 - [ ] Phase 01: Establish local `.env.example`, SQLite WAL setup, and initial owner auth migration & CLI command.
 - [ ] Phase 01: Configure CI pipeline and baseline test suite.
@@ -58,6 +62,7 @@
 | 2026-11-23 | 00 | Phase 00 architecture revision | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review |
 | 2026-11-23 | 00 | Phase 00 final sign-off prep: Pest 4 with PHPUnit 12, portable SQL monitor ordering, DB tests added | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review |
 | 2026-11-23 | 00 | Phase 00 architectural direction officially APPROVED by maintainer (@ayjed) | ADR-0001 to ADR-0004 ACCEPTED | APPROVED |
+| 2026-11-23 | 01 | Task 01: Git verified, environment audited, scaffold planned; BLOCKED by PHP 8.2 & missing Composer | docs/phases/PHASE_01_FOUNDATION.md | BLOCKED |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

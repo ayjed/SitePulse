@@ -2,10 +2,10 @@
 
 **Project:** SitePulse  
 **Current phase:** 01 — Foundation and local development  
-**Project status:** IN PROGRESS (Phase 01 Blocked on Environment Prerequisites)  
+**Project status:** IN PROGRESS  
 **Approved by:** @ayjed  
 **Approval date:** 2026-11-23  
-**Last reviewed:** 2026-11-23  
+**Last reviewed:** 2026-11-24  
 **Maintainer:** @ayjed  
 **Git tracking:** Branch `main` tracking `origin/main` (`https://github.com/ayjed/SitePulse.git`)
 
@@ -20,7 +20,7 @@
 | Phase | Objective | Status | Exit criteria |
 |---|---|---|---|
 | 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
-| 01 | Foundation and local development | BLOCKED | clean scaffold, reproducible setup, tests/CI running |
+| 01 | Foundation and local development | IN PROGRESS | clean scaffold, reproducible setup, tests/CI running |
 | 02 | HTTP monitor engine and persistence | NOT STARTED | scheduled checks, history, security tests |
 | 03 | Accessible dashboard | NOT STARTED | responsive monitoring UI and E2E smoke check |
 | 04 | Alerts, TLS checks, hardening | NOT STARTED | alert deduplication, SSL checks, negative security tests |
@@ -29,13 +29,14 @@
 ## Current next actions
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
-- [x] Development environment audited (Blockers identified: PHP 8.2 installed vs PHP 8.3+ required; Composer missing).
-- [x] Non-destructive scaffolding plan designed.
-- [ ] Resolve environment blockers: Install PHP 8.3+ and Composer 2.7+.
-- [ ] Phase 01: Scaffold approved Laravel 13 project via non-destructive procedure.
-- [ ] Phase 01: Verify Composer dependency resolution (Pest 4, PHPUnit 12, Livewire 4).
-- [ ] Phase 01: Establish local `.env.example`, SQLite WAL setup, and initial owner auth migration & CLI command.
-- [ ] Phase 01: Configure CI pipeline and baseline test suite.
+- [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, required extensions enabled).
+- [x] Non-destructive scaffolding executed safely into Git repository.
+- [x] Composer dependency resolution confirmed (Laravel 13.43.0, Pest 4.7.8, PHPUnit 12.5.33, Livewire 4.4.9).
+- [x] Local `.env.example`, `.env`, and SQLite WAL mode (busy_timeout 5000ms) verified.
+- [x] Framework boot verified and baseline automated tests executed passing (Pest 4 / PHPUnit 12).
+- [ ] Phase 01: Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`).
+- [ ] Phase 01: Configure CI pipeline (GitHub Actions) for linting, testing, and security checks.
+- [ ] Phase 01: Prepare Phase 01 completion report and request maintainer review.
 
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
@@ -63,6 +64,7 @@
 | 2026-11-23 | 00 | Phase 00 final sign-off prep: Pest 4 with PHPUnit 12, portable SQL monitor ordering, DB tests added | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review |
 | 2026-11-23 | 00 | Phase 00 architectural direction officially APPROVED by maintainer (@ayjed) | ADR-0001 to ADR-0004 ACCEPTED | APPROVED |
 | 2026-11-23 | 01 | Task 01: Git verified, environment audited, scaffold planned; BLOCKED by PHP 8.2 & missing Composer | docs/phases/PHASE_01_FOUNDATION.md | BLOCKED |
+| 2026-11-24 | 01 | Task 02: Environment resolved (PHP 8.4, Composer 2.11), Laravel 13 scaffolded, dependencies locked (Pest 4, PHPUnit 12, Livewire 4), SQLite WAL configured, baseline tests passing | `composer.lock`, `php artisan about`, `php artisan test` (2 passing) | In Progress |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

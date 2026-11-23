@@ -1,6 +1,6 @@
 # Security Notes and Threat Model
 
-**Status:** IN REVIEW (Lead Architect Discovery Complete)  
+**Status:** IN REVIEW (Phase 00 Architecture Revision)  
 **Date:** 2026-11-23  
 
 ---
@@ -13,7 +13,8 @@ Because the application accepts user-specified URLs and executes automated outbo
 2. Interacting with local loopback services (Redis on `6379`, MySQL on `3306`, Docker on `2375`, local administrative panels).
 3. Querying cloud infrastructure metadata endpoints (`http://169.254.169.254/latest/meta-data/`) to exfiltrate IAM roles, private keys, or instance tokens.
 4. Bypassing network boundaries via DNS rebinding or redirect chaining.
-5. Launching Denial-of-Service attacks against internal or external infrastructure via unbounded responses or connection exhaustion.
+5. Leaking requests through or attacking host-configured proxy servers.
+6. Launching Denial-of-Service attacks against internal or external infrastructure via unbounded responses or connection exhaustion.
 
 ---
 
@@ -26,9 +27,10 @@ Because the application accepts user-specified URLs and executes automated outbo
 | **Alternate IP Representations** | Target uses hex (`0x7f000001`), octal (`017700000001`), decimal integer (`2130706433`), or IPv4-mapped IPv6 (`::ffff:127.0.0.1`). | High | Canonicalize and parse IP addresses using standard PHP network functions (`inet_pton`, `filter_var`) before evaluation. |
 | **DNS Rebinding (TOCTOU)** | Attacker's domain resolves to public IP during validation, but returns `127.0.0.1` when cURL establishes the TCP socket. | Critical | Resolve DNS prior to connection; pin the validated IP to the socket connection via cURL's `CURLOPT_RESOLVE` flag. |
 | **Redirect to Internal Network** | Public URL `https://example.com/check` returns a 302 redirect to `http://127.0.0.1:8000/admin`. | Critical | Disable automatic cURL redirects (`CURLOPT_FOLLOWLOCATION = false`). Follow redirects manually in PHP code (max 3 hops), re-validating the full URL, DNS, and IP address at each hop. |
+| **Host Proxy Variable Exploitation** | Host environment sets `http_proxy` / `ALL_PROXY`, routing requests through an internal corporate proxy and bypassing local checks. | High | Explicitly set `CURLOPT_PROXY => ''` on monitoring handles to ignore environment proxies. |
 | **Internal Port Scanning** | Target uses non-standard ports (e.g., `http://example.com:22` or `http://example.com:6379`). | High | Enforce port allowlist (80, 443, 8080, 8443 by default). Explicitly reject known sensitive services. |
 | **Protocol Smuggling** | Target specifies `file://`, `gopher://`, `dict://`, `ftp://`, or `php://`. | Critical | Strict protocol allowlist: only `http` and `https` allowed. |
-| **Denial of Service (Slowloris / Stream)** | Target returns an infinite stream or takes minutes to respond, exhausting worker processes. | High | Enforce strict timeouts: 5s connection timeout, 10s total transfer timeout. |
+| **Denial of Service (Slowloris / Stream)** | Target returns an infinite stream or takes minutes to respond, exhausting worker processes. | High | Enforce strict timeouts: 5s connection timeout, 10s total transfer timeout, low-speed abort limits. |
 | **Zip Bomb / Memory Exhaustion** | Target returns a heavily compressed payload that expands to gigabytes in memory. | High | Cap response body buffering at 500 KB; abort connection once header/status evaluation is complete. |
 
 ---
@@ -86,7 +88,13 @@ $curlResolveRule = "{$host}:{$port}:{$chosenIp}";
 curl_setopt($ch, CURLOPT_RESOLVE, [$curlResolveRule]);
 ```
 
-### 3.3 Manual Redirect Execution
+### 3.3 Proxy Environment Variable Isolation
+To ensure requests are not unexpectedly forwarded through local or corporate proxies defined in the operating system environment:
+```php
+curl_setopt($ch, CURLOPT_PROXY, '');
+```
+
+### 3.4 Manual Redirect Execution
 Automatic redirection (`CURLOPT_FOLLOWLOCATION = true`) is prohibited.
 Redirects are followed step-by-step:
 1. Check response status code for 301, 302, 303, 307, 308.
@@ -111,16 +119,21 @@ Redirects are followed step-by-step:
 
 ---
 
-## 5. Release-Blocking Security Test Suite
+## 5. Security Test Matrix and Acceptance Criteria
 
-The following security tests must pass before Phase 02 and Phase 04 exit gates:
-1. **SSRF Direct IP:** Reject `127.0.0.1`, `localhost`, `[::1]`, `169.254.169.254`, `10.0.0.1`, `192.168.1.1`.
-2. **SSRF Encoded IP:** Reject `2130706433`, `0x7f000001`, `0177.0.0.1`, `::ffff:127.0.0.1`.
-3. **DNS Resolution to Private IP:** Mock DNS resolving custom domain to `10.1.2.3` must be rejected.
-4. **Split-Horizon / Dual-Stack DNS:** DNS returning 1 public IP and 1 private IP must be rejected.
-5. **Redirect to Private Network:** Initial request to public URL redirecting to `http://127.0.0.1` must be rejected on hop 1.
-6. **Redirect Loop:** Target redirecting in a continuous loop must terminate cleanly at hop 3 with `MAX_REDIRECTS_EXCEEDED`.
-7. **Port Filter:** Reject URLs with non-standard ports (e.g., `http://example.com:22`, `http://example.com:6379`).
-8. **Disallowed Schemes:** Reject `file:///etc/passwd`, `gopher://...`, `ftp://...`.
-9. **Slow Response Timeout:** Target delaying response past 10s must cleanly terminate with `TIMEOUT`.
-10. **Oversized Response Body:** Target returning > 500 KB payload must terminate transfer without memory exhaustion.
+| ID | Test Scenario | Input / Setup | Expected Outcome | Acceptance Criteria |
+|---|---|---|---|---|
+| **SEC-01** | Direct IPv4 Loopback | `http://127.0.0.1/` | Request blocked before socket open | Throws `BlockedDestinationException`, 0 outbound packets |
+| **SEC-02** | Direct IPv6 Loopback | `http://[::1]/` | Request blocked before socket open | Throws `BlockedDestinationException`, 0 outbound packets |
+| **SEC-03** | RFC 1918 Private IP | `http://192.168.1.1/`, `http://10.0.0.1/` | Request blocked | Throws `BlockedDestinationException` |
+| **SEC-04** | Cloud Metadata IP | `http://169.254.169.254/latest/` | Request blocked | Throws `BlockedDestinationException` |
+| **SEC-05** | Dword / Hex IP Literal | `http://2130706433/`, `http://0x7f000001/` | Input validation rejection | URL rejected during validation or IP normalization |
+| **SEC-06** | DNS Resolving to Private IP | `http://rebinding.test/` resolving to `10.1.2.3` | DNS check fails | Throws `BlockedDestinationException` |
+| **SEC-07** | Dual-homed Split DNS | DNS returns `198.51.100.1` AND `127.0.0.1` | Check fails if any IP is restricted | Entire destination rejected |
+| **SEC-08** | Redirect to Private Network | Public URL 302-redirects to `http://127.0.0.1/` | Hop 1 blocked | Hop 1 intercepts `Location`, validates, aborts |
+| **SEC-09** | Redirect Loop | Target cycles between `/a` and `/b` | Max redirects exceeded | Aborts after 3 hops with `MAX_REDIRECTS_EXCEEDED` |
+| **SEC-10** | Sensitive Internal Port | `http://example.com:22/`, `http://example.com:6379/` | Port rejected | Validation fails, 0 outbound packets |
+| **SEC-11** | Non-HTTP Protocol | `file:///etc/passwd`, `gopher://...` | Scheme rejected | Validation fails |
+| **SEC-12** | Host Proxy Override | Host has `http_proxy=internal-proxy:8080` | Proxy ignored | Request does not traverse internal proxy |
+| **SEC-13** | Slowloris / Timeout | Server delays response past 10s | Connection cleanly aborted | Check recorded as `TIMEOUT`, worker remains alive |
+| **SEC-14** | Giant / Stream Response | Server streams infinite zeroes | Body buffer capped at 500 KB | Transfer aborted, memory usage does not spike |

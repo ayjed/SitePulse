@@ -24,36 +24,37 @@
 | 05 | Packaging, documentation, public release | NOT STARTED | install verified, license/docs/demo/release checks |
 
 ## Current next actions
-- [x] Identify primary users and minimum hosting tier.
-- [x] Compare CLI cron availability and Laravel scheduling assumptions.
-- [x] Decide whether arbitrary URLs are supported; document safe fetch policy.
-- [x] Confirm v1 feature limits and non-goals.
-- [x] Create architecture decision records for stack, security, storage, and alerts (ADR-0001 to ADR-0004).
+- [x] Identify primary users and minimum hosting tier ([`docs/HOSTING_REQUIREMENTS.md`](docs/HOSTING_REQUIREMENTS.md)).
+- [x] Formulate stack decision for Laravel 13 on PHP 8.3+ ([`ADR-0001`](docs/decisions/ADR-0001-stack.md)).
+- [x] Detail 11-layer SSRF defense and test matrix ([`ADR-0002`](docs/decisions/ADR-0002-safe-http-client.md), [`docs/SECURITY.md`](docs/SECURITY.md)).
+- [x] Define scheduler concurrency, timeout budgets, interruption recovery, and batch writes ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`ADR-0003`](docs/decisions/ADR-0003-data-retention-and-storage.md)).
+- [x] Confirm v1 feature limits and non-goals ([`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)).
+- [x] Formulate test plan with security and state machine scenarios ([`docs/TEST_PLAN.md`](docs/TEST_PLAN.md)).
 - [ ] Maintainer review and explicit approval of Phase 00 deliverables before Phase 01 scaffolding.
 
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
 |---|---|---|---|---|---|
-| D-001 | Framework/runtime and minimum hosting | Maintainer | PROPOSED | 00 | [ADR-0001](docs/decisions/ADR-0001-stack.md) |
-| D-002 | Database support and migrations | Maintainer | PROPOSED | 00 | [ADR-0003](docs/decisions/ADR-0003-data-retention-and-storage.md) |
-| D-003 | Safe URL/check policies | Maintainer | PROPOSED | 00 | [ADR-0002](docs/decisions/ADR-0002-safe-http-client.md) |
-| D-004 | Email notification delivery strategy | Maintainer | PROPOSED | 00 | [ADR-0004](docs/decisions/ADR-0004-incident-state-and-alerts.md) |
+| D-001 | Framework (Laravel 13 on PHP 8.3+) & Hosting Constraints | Maintainer | PROPOSED | 00 | [ADR-0001](docs/decisions/ADR-0001-stack.md), [HOSTING_REQUIREMENTS](docs/HOSTING_REQUIREMENTS.md) |
+| D-002 | Database (SQLite WAL default + MySQL) & Batch Pruning | Maintainer | PROPOSED | 00 | [ADR-0003](docs/decisions/ADR-0003-data-retention-and-storage.md) |
+| D-003 | Safe HTTP Client & 11-Layer SSRF Defense | Maintainer | PROPOSED | 00 | [ADR-0002](docs/decisions/ADR-0002-safe-http-client.md), [SECURITY](docs/SECURITY.md) |
+| D-004 | Incident State Machine & Notification Deduplication | Maintainer | PROPOSED | 00 | [ADR-0004](docs/decisions/ADR-0004-incident-state-and-alerts.md) |
 
 ## Risks and mitigations
 | Risk | Severity | Mitigation | Status |
 |---|---|---|---|
-| SSRF / private network probing | Critical | strict destination policy, DNS/IP checks, redirects restricted, pinned socket via `CURLOPT_RESOLVE` | MITIGATION DESIGNED (ADR-0002) |
-| Misleading shared-hosting compatibility | High | verify on real target hosts, document requirements (PHP 8.3 CLI + cron required) | MITIGATION DESIGNED (ADR-0001) |
-| Duplicate notifications | Medium | incident state machine ($N=2$ fail threshold) and notification idempotency table | MITIGATION DESIGNED (ADR-0004) |
-| Failed scheduled tasks | High | heartbeat, failure logs, `withoutOverlapping` mutex, recovery tests | MITIGATION DESIGNED (ADR-0001) |
-| Unbounded database growth | Medium | daily scheduled pruning command (`sitepulse:prune-checks`) with 30-day default window | MITIGATION DESIGNED (ADR-0003) |
-| Over-reliance on AI code | Medium | small PRs, tests, human review and rollback plan | OPEN |
+| SSRF / private network probing | Critical | 11-layer defense: DNS pre-resolution, CIDR blocks, `CURLOPT_RESOLVE` socket pinning, proxy isolation, manual redirects | MITIGATION DESIGNED (ADR-0002, SECURITY.md) |
+| Constrained hosting process/cron failures | High | Bounded concurrency (5 workers), 50s execution cap, `withoutOverlapping` mutex, interruption recovery | MITIGATION DESIGNED (ARCHITECTURE.md, HOSTING_REQUIREMENTS.md) |
+| Duplicate notifications / Alert fatigue | Medium | Incident state machine ($N=2$ fail threshold, $M=2$ recovery) and notification idempotency table | MITIGATION DESIGNED (ADR-0004) |
+| Unbounded database growth | Medium | Daily scheduled pruning command (`sitepulse:prune-checks`) with 30-day default window and batch writes | MITIGATION DESIGNED (ADR-0003) |
+| Over-reliance on AI code | Medium | Small PRs, tests, human review and rollback plan | OPEN |
 
 ## Active work log
 | Date | Phase | Change | Evidence | Review |
 |---|---|---|---|---|
 | 2026-11-23 | 00 | Planning starter pack initialized | Repository documentation | Initial draft |
-| 2026-11-23 | 00 | Phase 00 architectural discovery review & ADR formulation | Updated PRD, ARCHITECTURE, SECURITY, and ADRs 0001–0004 | In Review (Maintainer Gate) |
+| 2026-11-23 | 00 | Phase 00 architectural discovery review & ADR formulation | Updated PRD, ARCHITECTURE, SECURITY, ADRs 0001–0004 | In Review |
+| 2026-11-23 | 00 | Phase 00 architecture revision (Laravel 13, SafeHttpClient, Scheduler, Hosting Specs) | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review (Maintainer Gate) |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

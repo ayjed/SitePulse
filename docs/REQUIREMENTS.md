@@ -1,6 +1,6 @@
 # Product Requirements Document
 
-**Status:** IN REVIEW (Lead Architect Discovery Complete)  
+**Status:** IN REVIEW (Phase 00 Architecture Revision)  
 **Date:** 2026-11-23  
 **Target Milestone:** v1.0.0 MVP  
 
@@ -9,14 +9,14 @@
 ## 1. Problem Statement
 Small site owners, solo PHP developers, and boutique agencies need actionable uptime and latency monitoring for their sites and client portfolios. Existing solutions either require deploying complex, resource-heavy observability stacks (Prometheus, Grafana, Datadog) or incur high recurring SaaS fees with aggressive monitor limits.
 
-SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor that installs quickly on standard PHP hosting, runs autonomously via cron, alerts only when genuine outages occur, and enforces strict security controls to prevent internal network abuse.
+SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor that installs on compatible PHP infrastructure (documented in [docs/HOSTING_REQUIREMENTS.md](HOSTING_REQUIREMENTS.md)), runs autonomously via cron, alerts only when genuine outages occur, and enforces strict security controls to prevent internal network abuse.
 
 ---
 
 ## 2. Target Personas & Use Cases
 
 ### Personas
-1. **Solo PHP / Web Freelancer:** Maintains 5–25 client websites on VPS or shared hosting; needs reliable availability history and immediate outage alerts before clients notice.
+1. **Solo PHP / Web Freelancer:** Maintains 5–25 client websites on VPS or modern shared hosting; needs reliable availability history and immediate outage alerts before clients notice.
 2. **Small Agency Technical Lead:** Needs an internal dashboard to observe uptime and SSL certificate expiration across client production domains.
 3. **Indie Developer / Maker:** Self-hosts personal side projects; wants zero-cost, low-maintenance monitoring with SQLite storage.
 
@@ -49,7 +49,7 @@ SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor th
 - **Outbound Check Execution:** Executes periodically via cron.
 - **User-Agent:** Identifies explicitly as `SitePulse/1.0 (+https://github.com/.../sitepulse)`.
 - **Metrics Collected:** HTTP status code, total response time (latency in milliseconds), timestamp, failure classification (`TIMEOUT`, `DNS_FAILURE`, `CONNECTION_REFUSED`, `HTTP_ERROR`, `SSRF_BLOCKED`, `TLS_ERROR`), and sanitized error message.
-- **Security Guardrails:** Strictly routed through `SafeHttpClient` with DNS pre-validation, private IP blocking, and hop-by-hop redirect inspection (see `docs/SECURITY.md`).
+- **Security & Network Guardrails:** Strictly routed through `SafeHttpClient` with DNS pre-validation, private IP blocking, socket IP pinning, proxy variable isolation, and hop-by-hop redirect inspection (see `docs/SECURITY.md`).
 
 ### 3.4 Outage Detection & Incident State Machine (FR-4)
 - **Flapping Prevention:** Outage confirmation requires **$N = 2$ consecutive failed checks**. Recovery confirmation requires **$M = 2$ consecutive successful checks**.
@@ -81,6 +81,7 @@ SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor th
 
 ### 3.8 Storage & Data Pruning (FR-8)
 - **Default Database:** SQLite with Write-Ahead Logging (WAL) enabled; MySQL 8.0+ supported.
+- **Batch Persistence:** Check results are committed in batch transactions to prevent lock contention.
 - **Automated Retention:** Daily scheduled command (`sitepulse:prune-checks`) purging raw check results older than 30 days. Historical `incidents` records are preserved permanently.
 
 ---
@@ -90,8 +91,8 @@ SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor th
 | Metric | Target | Verification Method |
 |---|---|---|
 | **Security (SSRF)** | 100% block rate for private/loopback/cloud metadata IPs | Negative security test suite with mock DNS/sockets |
-| **Execution Memory** | $\le 64$ MB per cron check execution | CLI memory profiling during check runs |
-| **Check Latency Budget** | 50 monitors checked in $\le 30$ seconds | Asynchronous connection pooling (concurrency 5–10) |
+| **Execution Memory** | $\le 45$ MB per cron check execution | CLI memory profiling during check runs |
+| **Check Latency Budget** | 50 monitors checked in $\le 25$ seconds | Asynchronous connection pooling (concurrency 5–10) |
 | **Accessibility** | WCAG 2.1 AA compliant | Axe core audit and keyboard navigation test |
 | **Storage Growth** | $\le 50$ MB database size for 10 monitors over 30 days | SQLite disk measurement with 30-day retention |
 | **Deterministic Behavior** | 0 duplicate notifications during simulated flapping | Incident state machine unit test suite |

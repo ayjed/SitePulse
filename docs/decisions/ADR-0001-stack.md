@@ -1,52 +1,57 @@
 # ADR-0001: Application Stack, Runtime, and Hosting Constraints
 
-**Status:** PROPOSED  
+**Status:** PROPOSED (Phase 00 Architecture Revision)  
 **Date:** 2026-11-23  
 **Deciders:** Lead Architect, Maintainer (@ayjed)
 
 ## Context
 SitePulse is an open-source, self-hosted website uptime and response-time monitoring application. The system must be straightforward for PHP developers and small site owners to self-host, reliable over months of unattended operation, and secure by default against network-probing vulnerabilities.
 
-We must decide on the foundational application framework, PHP runtime requirements, UI stack, database drivers, and hosting tier assumptions before Phase 01 scaffolding begins.
+Following Phase 00 review feedback, the foundational application framework baseline is updated from Laravel 11 to **Laravel 13 on PHP 8.3+**. We must formally verify the compatibility of the framework, frontend libraries, database engines, testing harnesses, and runtime constraints before Phase 01 scaffolding begins.
+
+## Stack Compatibility Verification
+
+| Component | Target Version | Compatibility & Verification Status |
+|---|---|---|
+| **PHP Runtime** | **PHP 8.3+ / 8.4** | Baseline runtime. Provides typed class constants, dynamic class constant fetch, `json_validate()`, and modern memory/performance enhancements. |
+| **Framework Core** | **Laravel 13.x** | Requires PHP 8.3+. Standardizes on lean application structure, modern routing, integrated task scheduling (`Schedule`), Eloquent ORM, and first-class mail notifications. |
+| **Frontend UI** | **Blade + Tailwind CSS (v3/v4) + Livewire 3.x** | Server-rendered Blade components styled with Tailwind CSS via Vite. Livewire 3 provides reactive dashboard updates without requiring an external SPA build or Node daemon in production. |
+| **Testing Harness** | **Pest 3.x / PHPUnit 11.x** | Pest 3 is designed for PHP 8.3+ and Laravel 13. Provides expressive, readable unit, integration, and security test suites. |
+| **Default Database** | **SQLite 3.35.0+** | Zero-configuration single-file database. Configured with Write-Ahead Logging (`WAL`) mode and busy timeout for safe concurrent CLI writes and web reads. |
+| **Alternate Database** | **MySQL 8.0+ / MariaDB 10.5+** | Fully supported via standard Laravel Eloquent migrations with zero code divergence. |
+| **Task Scheduling** | **Laravel Console Scheduler** | Driven by standard system cron: `* * * * * php artisan schedule:run`. |
 
 ## Options Considered
 
-### Option 1: Minimalist Custom PHP / Micro-framework (e.g., Slim 4 + Phinx + Custom Auth)
-- **Advantages:**
-  - Lower disk footprint (~15 MB vs ~60 MB).
-  - Slightly lower baseline memory usage per CLI invocation (~15 MB).
-  - Can run on very constrained legacy shared hosting.
-- **Disadvantages:**
-  - High engineering overhead: authentication, session handling, CSRF protection, database migrations, CLI scheduling, and mail abstractions must be manually assembled and maintained.
-  - Significantly higher risk of subtle security flaws in hand-rolled authentication, authorization, and rate-limiting.
-  - Slower feature development velocity and less standardized test tooling.
+### Option 1: Minimalist Custom PHP / Micro-framework (Slim 4 / Symfony Micro)
+- **Advantages:** Lower disk footprint (~15 MB vs ~60 MB).
+- **Disadvantages:** Slower velocity; custom-built authentication, CSRF, migration, and CLI scheduling engines present high security and maintenance overhead.
 
-### Option 2: Full-Stack Laravel 11.x + Blade / Tailwind CSS + SQLite / MySQL (Selected)
+### Option 2: Full-Stack Laravel 13.x + Blade / Tailwind CSS + SQLite / MySQL (Selected)
 - **Advantages:**
-  - Modern PHP 8.3+ idioms, strict typing, and security defaults (robust session handling, bcrypt/argon2 hashing, CSRF tokens, secure cookie flags).
-  - First-class CLI task scheduling (`Schedule`), Eloquent ORM with cross-database migration support, and clean Mail notification components.
-  - Standardized, mature testing ecosystem (Pest / PHPUnit) with built-in HTTP and database test helpers.
-  - Active community, extensive documentation, and familiar operational model for the primary target persona (PHP developers).
+  - Modern PHP 8.3+ idioms, strict typing, and rock-solid security defaults (bcrypt/argon2id, CSRF tokens, secure session cookies, rate-limiting).
+  - Out-of-the-box CLI scheduling with overlap prevention (`withoutOverlapping`).
+  - Active ecosystem with standardized test tooling (Pest 3).
+  - Familiar operational paradigm for target PHP developers.
 - **Disadvantages:**
-  - Higher disk footprint (~55–75 MB in `vendor`).
-  - Baseline memory per CLI invocation is ~30–45 MB (well within standard 128 MB–256 MB PHP memory limits, but requires verification on cheap hosts).
-  - Requires Composer and PHP CLI access for installation and updates.
+  - Disk footprint of `vendor/` is ~60–80 MB.
+  - Baseline memory per CLI invocation is ~35–45 MB (well within standard 128 MB–256 MB PHP limits, but requires bounded concurrency on constrained hosts).
 
 ## Decision
-Adopt **Option 2: Laravel 11.x on PHP 8.3+**:
-1. **Runtime:** PHP 8.3+ with extensions: `curl`, `pdo_sqlite`, `pdo_mysql`, `mbstring`, `openssl`, `xml`, `bcmath`.
-2. **Framework:** Laravel 11.x.
-3. **Frontend:** Server-rendered Blade components styled with Tailwind CSS (clean, fast, accessible; Livewire evaluated for reactive dashboard polling in Phase 03 without requiring a separate SPA build).
-4. **Testing Suite:** Pest PHP (built on PHPUnit) for readable unit, integration, and security test coverage.
-5. **Database Driver:** SQLite as zero-configuration default; MySQL 8.0+ / MariaDB 10.5+ fully supported via standard migrations.
-6. **Task Scheduling:** Standard system cron triggering `php artisan schedule:run` once per minute.
-7. **Minimum Hosting Target:** 
-   - Low-cost VPS (e.g., 1 vCPU, 1 GB RAM on Hetzner, DigitalOcean, Linode), Docker container, or modern shared hosting with PHP 8.3 CLI, cron, and SQLite support.
+Adopt **Laravel 13.x on PHP 8.3+**:
+1. **Runtime:** PHP 8.3+ with required extensions: `curl`, `pdo_sqlite`, `pdo_mysql`, `mbstring`, `openssl`, `xml`, `bcmath`, `filter`, `ctype`, `tokenizer`, `session`.
+2. **Framework:** Laravel 13.x.
+3. **Frontend:** Server-rendered Blade components styled with Tailwind CSS; Livewire 3 for dynamic dashboard metrics.
+4. **Testing Suite:** Pest 3.x (PHPUnit 11 foundation).
+5. **Database Driver:** SQLite as zero-configuration default; MySQL 8.0+ / MariaDB 10.5+ fully supported.
+6. **Task Scheduling:** Single system cron invoking `php artisan schedule:run` once per minute.
+7. **Minimum Hosting Target:** VPS (1 vCPU, 1 GB RAM) or modern CLI-enabled shared hosting with cron access (documented in `docs/HOSTING_REQUIREMENTS.md`).
 
 ## Consequences
-- Fast, secure foundation for Phase 01 scaffolding.
-- Consistent architecture avoiding custom infrastructure code.
-- Setup requirements are clearly communicated: SSH/CLI access and a 1-minute cron entry are required. Users without CLI access cannot reliably operate SitePulse v1.
+- Modern, clean codebase for Phase 01 scaffolding.
+- Consistent architecture avoiding bespoke framework layers.
+- Minimum hosting requirements are strictly documented: SSH/CLI access and a 1-minute cron entry are required. Users without CLI access cannot reliably operate SitePulse v1.
 
-## Required Evidence
-- Phase 01 must measure clean scaffold memory footprint, verify SQLite WAL performance, and confirm test suite execution in CI.
+## Required Evidence & Acceptance Criteria
+- Phase 01 clean scaffold must execute on PHP 8.3+ with automated Pest test pass in CI.
+- Measure baseline CLI memory footprint and verify execution under 45 MB.

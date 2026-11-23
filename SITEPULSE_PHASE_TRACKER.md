@@ -1,8 +1,10 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 00 — Discovery & feasibility  
-**Project status:** IN REVIEW  
+**Current phase:** 00 (APPROVED) — Next: 01 Foundation and local development  
+**Project status:** PHASE 00 APPROVED  
+**Approved by:** @ayjed  
+**Approval date:** 2026-11-23  
 **Last reviewed:** 2026-11-23  
 **Maintainer:** @ayjed  
 **Git tracking:** Branch `main` tracking `origin/main` (`https://github.com/ayjed/SitePulse-Planning-Starter.git`)
@@ -17,7 +19,7 @@
 ## Phase gates
 | Phase | Objective | Status | Exit criteria |
 |---|---|---|---|
-| 00 | Define users, constraints, feasibility, risks | IN REVIEW | requirements, threat model, technical choices reviewed |
+| 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
 | 01 | Foundation and local development | NOT STARTED | clean scaffold, reproducible setup, tests/CI running |
 | 02 | HTTP monitor engine and persistence | NOT STARTED | scheduled checks, history, security tests |
 | 03 | Accessible dashboard | NOT STARTED | responsive monitoring UI and E2E smoke check |
@@ -25,21 +27,19 @@
 | 05 | Packaging, documentation, public release | NOT STARTED | install verified, license/docs/demo/release checks |
 
 ## Current next actions
-- [x] Identify primary users and minimum hosting tier ([`docs/HOSTING_REQUIREMENTS.md`](docs/HOSTING_REQUIREMENTS.md)).
-- [x] Formulate stack decision for Laravel 13, Pest 4, Livewire 4 ([`ADR-0001`](docs/decisions/ADR-0001-stack.md)).
-- [x] Detail SSRF defense, strict canonical IP validation, peer verification ([`ADR-0002`](docs/decisions/ADR-0002-safe-http-client.md), [`docs/SECURITY.md`](docs/SECURITY.md)).
-- [x] Define scheduler monotonic deadline, handle cancellation, lock TTL, and batch writes ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`ADR-0003`](docs/decisions/ADR-0003-data-retention-and-storage.md)).
-- [x] Confirm v1 feature limits and non-goals ([`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)).
-- [x] Formulate test plan with security (SEC-01 to SEC-16) and scheduler scenarios ([`docs/TEST_PLAN.md`](docs/TEST_PLAN.md)).
-- [ ] Maintainer review and explicit approval of Phase 00 deliverables before Phase 01 scaffolding.
+- [x] Phase 00 maintainer review and explicit approval (@ayjed).
+- [ ] Phase 01: Scaffold approved Laravel 13 on PHP 8.3+ project.
+- [ ] Phase 01: Verify Composer dependency resolution (Pest 4, PHPUnit 12, Livewire 4).
+- [ ] Phase 01: Establish local `.env.example`, SQLite WAL setup, and initial owner auth migration & CLI command.
+- [ ] Phase 01: Configure CI pipeline and baseline test suite.
 
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
 |---|---|---|---|---|---|
-| D-001 | Framework (Laravel 13 on PHP 8.3+), Pest 4 with PHPUnit 12, Livewire 4 & Hosting Targets | Maintainer | PROPOSED | 00 | [ADR-0001](docs/decisions/ADR-0001-stack.md), [HOSTING_REQUIREMENTS](docs/HOSTING_REQUIREMENTS.md) |
-| D-002 | Database (SQLite WAL default + MySQL), Portable Monitor Ordering & Batch Pruning | Maintainer | PROPOSED | 00 | [ADR-0003](docs/decisions/ADR-0003-data-retention-and-storage.md) |
-| D-003 | Safe HTTP Client, Strict IP Validation & Peer Verification | Maintainer | PROPOSED | 00 | [ADR-0002](docs/decisions/ADR-0002-safe-http-client.md), [SECURITY](docs/SECURITY.md) |
-| D-004 | Incident State Machine & Notification Deduplication | Maintainer | PROPOSED | 00 | [ADR-0004](docs/decisions/ADR-0004-incident-state-and-alerts.md) |
+| D-001 | Framework (Laravel 13 on PHP 8.3+), Pest 4 with PHPUnit 12, Livewire 4 & Hosting Targets | Maintainer | ACCEPTED | 00 | [ADR-0001](docs/decisions/ADR-0001-stack.md), [HOSTING_REQUIREMENTS](docs/HOSTING_REQUIREMENTS.md) |
+| D-002 | Database (SQLite WAL default + MySQL), Portable Monitor Ordering & Batch Pruning | Maintainer | ACCEPTED | 00 | [ADR-0003](docs/decisions/ADR-0003-data-retention-and-storage.md) |
+| D-003 | Safe HTTP Client, Strict IP Validation & Peer Verification | Maintainer | ACCEPTED | 00 | [ADR-0002](docs/decisions/ADR-0002-safe-http-client.md), [SECURITY](docs/SECURITY.md) |
+| D-004 | Incident State Machine & Notification Deduplication | Maintainer | ACCEPTED | 00 | [ADR-0004](docs/decisions/ADR-0004-incident-state-and-alerts.md) |
 
 ## Risks and mitigations
 | Risk | Severity | Mitigation | Status |
@@ -56,7 +56,8 @@
 | 2026-11-23 | 00 | Planning starter pack initialized | Repository documentation | Initial draft |
 | 2026-11-23 | 00 | Phase 00 architectural discovery review & ADR formulation | Updated PRD, ARCHITECTURE, SECURITY, ADRs 0001–0004 | In Review |
 | 2026-11-23 | 00 | Phase 00 architecture revision | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review |
-| 2026-11-23 | 00 | Phase 00 final sign-off prep: Pest 4 with PHPUnit 12, portable SQL monitor ordering, DB tests added | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review (Maintainer Gate) |
+| 2026-11-23 | 00 | Phase 00 final sign-off prep: Pest 4 with PHPUnit 12, portable SQL monitor ordering, DB tests added | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review |
+| 2026-11-23 | 00 | Phase 00 architectural direction officially APPROVED by maintainer (@ayjed) | ADR-0001 to ADR-0004 ACCEPTED | APPROVED |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

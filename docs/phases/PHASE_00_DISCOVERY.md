@@ -1,8 +1,10 @@
 # Phase 00 — Discovery and Feasibility
 
-**Status:** IN PROGRESS  
+**Status:** APPROVED  
 **Owner:** Maintainer (@ayjed)  
-**Gate:** Explicit maintainer review required before Phase 01.
+**Approved by:** @ayjed  
+**Approval date:** 2026-11-23  
+**Gate:** Formally approved; Phase 01 unlocked.
 
 ## Goal
 Validate that a secure and useful monitoring MVP can run on the target hosting model.
@@ -23,11 +25,11 @@ Validate that a secure and useful monitoring MVP can run on the target hosting m
 - [x] Confirm Git environment and remote tracking status.
 
 ## Acceptance criteria
-- [ ] Requirements and non-goals agreed.
-- [ ] Documented deployment feasibility and limitations.
-- [ ] Architecture and SSRF protection approach reviewed.
-- [ ] Implementation tasks are sufficiently small for Phase 01.
-- [ ] Maintainer explicitly approves Phase 00.
+- [x] Requirements and non-goals agreed.
+- [x] Documented deployment feasibility and limitations.
+- [x] Architecture and SSRF protection approach reviewed.
+- [x] Implementation tasks are sufficiently small for Phase 01.
+- [x] Maintainer explicitly approves Phase 00.
 
 ## Deliverables
 - Requirements: [`docs/REQUIREMENTS.md`](../REQUIREMENTS.md)
@@ -45,8 +47,5 @@ Validate that a secure and useful monitoring MVP can run on the target hosting m
 - 2026-11-23: Initial draft created; no approval claimed.
 - 2026-11-23: Phase 00 discovery review completed.
 - 2026-11-23: Phase 00 architecture revision completed.
-- 2026-11-23: Phase 00 final technical corrections completed:
-  - Testing baseline specified as Pest 4 with PHPUnit 12 (actual package resolution verified in Phase 01).
-  - Replaced `NULLS FIRST` with cross-database portable SQL ordering (`ORDER BY (CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END) ASC, last_checked_at ASC`) compatible with SQLite and MySQL.
-  - Added cross-database due monitor prioritization tests (DB-01) to test plan.
-  - Phase remains `IN PROGRESS` / `IN REVIEW` awaiting maintainer gate review.
+- 2026-11-23: Phase 00 final technical corrections completed.
+- 2026-11-23: Phase 00 officially APPROVED by maintainer (@ayjed). All four ADRs (ADR-0001 to ADR-0004) marked ACCEPTED. Phase 01 unlocked.

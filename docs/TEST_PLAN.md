@@ -1,23 +1,23 @@
 # Test Plan & Quality Assurance Strategy
 
-**Status:** PROPOSED (Phase 00 Architecture Revision)  
+**Status:** PROPOSED (Phase 00 Final Technical Corrections)  
 **Date:** 2026-11-23  
 
 ---
 
 ## 1. Test Levels & Strategy
 
-SitePulse employs an automated test strategy using **Pest 3.x** (built on PHPUnit 11) to ensure deterministic behavior across health checks, state transitions, notifications, and security boundaries.
+SitePulse employs an automated test strategy using **Pest 4.x** (built on PHPUnit 11+, subject to Composer resolution) to ensure deterministic behavior across health checks, state transitions, notifications, and security boundaries.
 
 ```
        ▲
       / \     E2E / Browser Smoke (Dashboard, Accessibility, Mobile)
      /---\    
-    /     \   Integration (Migrations, Scheduler, Batch DB, Mailer)
+    /     \   Integration & Benchmarks (Migrations, Scheduler, Batch DB, Mailer)
    /-------\  
-  /         \ Security Suite (SSRF, DNS Rebinding, Proxy Isolation, Timeouts)
+  /         \ Security Suite (SSRF, DNS Pinning, Ambiguous IPs, Peer Verification)
  /-----------\
-/             \ Unit (URL Parser, CIDR Matching, State Machine, Deduplication)
+/             \ Unit (Canonical URL, CIDR Denylist, State Machine, Deduplication)
 ```
 
 ---
@@ -33,35 +33,38 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 | **SEC-02** | Loopback IPv6 (`[::1]`) | Throws `BlockedDestinationException`, 0 network packets |
 | **SEC-03** | RFC 1918 Private Subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | Throws `BlockedDestinationException` |
 | **SEC-04** | Cloud Metadata Endpoints (`169.254.169.254`, `metadata.google.internal`) | Throws `BlockedDestinationException` |
-| **SEC-05** | Obfuscated / Alternate IP Literals (Dword, Hex, Octal, IPv4-mapped IPv6) | Rejected at input validation or parsed and blocked |
-| **SEC-06** | DNS Resolving to Private IP | Blocked upon DNS resolution check |
-| **SEC-07** | Dual-Homed / Split DNS (Public IP + Private IP in response) | Entire request aborted if any IP is restricted |
-| **SEC-08** | Redirect to Private Destination | Traversal intercepted at Hop 1, aborts before connection |
-| **SEC-09** | Circular Redirect Loop | Aborts cleanly after 3 hops with `MAX_REDIRECTS_EXCEEDED` |
-| **SEC-10** | Sensitive Internal Ports (SSH 22, Redis 6379, MySQL 3306, etc.) | Validation fails, 0 network packets |
-| **SEC-11** | Forbidden Protocols (`file://`, `gopher://`, `ftp://`) | Validation fails, only `http` and `https` allowed |
-| **SEC-12** | Environment Proxy Variable Override (`http_proxy`, `ALL_PROXY`) | System proxy ignored, direct safe socket opened |
-| **SEC-13** | Slowloris / Hung Socket (Response delay > 10s) | Terminated by `CURLOPT_TIMEOUT`, logged as `TIMEOUT` |
-| **SEC-14** | Giant / Unbounded Response Body (> 500 KB) | Buffer aborted at 500 KB cap, memory usage stable |
+| **SEC-05** | Ambiguous IP Literals (Dword, Hex, Octal, Mixed Radix) | Rejected during canonical URL validation |
+| **SEC-06** | Ambiguous IP with Leading Zeros (`0127.0.0.1`, `127.000.000.001`) | Rejected during canonical URL validation |
+| **SEC-07** | DNS Resolving to Private IP | Blocked upon DNS resolution check |
+| **SEC-08** | Dual-Homed / Split DNS (Public IP + Private IP in response) | Entire request aborted if any IP is restricted |
+| **SEC-09** | Redirect to Private Destination | Traversal intercepted at Hop 1, aborts before connection |
+| **SEC-10** | Circular Redirect Loop | Aborts cleanly after 3 hops with `MAX_REDIRECTS_EXCEEDED` |
+| **SEC-11** | Sensitive Internal Ports (SSH 22, Redis 6379, MySQL 3306, etc.) | Validation fails, 0 network packets |
+| **SEC-12** | Forbidden Protocols (`file://`, `gopher://`, `ftp://`) | Validation fails, only canonical `http` and `https` allowed |
+| **SEC-13** | Environment Proxy Variable Override (`http_proxy`, `ALL_PROXY`) | System proxy ignored (`CURLOPT_PROXY => ''`), direct safe socket opened |
+| **SEC-14** | Connected Peer IP Mismatch (`CURLINFO_PRIMARY_IP`) | Socket connected IP does not match pinned IP; response discarded |
+| **SEC-15** | Slowloris / Hung Socket (Response delay > 10s) | Terminated by `CURLOPT_TIMEOUT`, logged as `TIMEOUT` |
+| **SEC-16** | Giant / Unbounded Response Body (> 500 KB) | Buffer aborted at 500 KB cap, memory usage stable |
 
-### 2.2 Scheduler & Concurrency Suite (Phase 02 Gate)
-- **SCHED-01 (Overlap Prevention):** When `sitepulse:check-monitors` is running, a concurrent invocation must exit immediately with code `0`.
-- **SCHED-02 (Worker Pool Concurrency):** Verify that 15 due monitors are processed in concurrent batches of 5 without blocking.
-- **SCHED-03 (Execution Budget):** Verify that if command runtime reaches 45 seconds, the worker loop stops picking up new monitors and exits cleanly.
-- **SCHED-04 (Interruption Recovery):** Simulate worker termination mid-cycle; verify that uncompleted monitors retain their due status and are prioritized on the next run (`ORDER BY last_checked_at ASC NULLS FIRST`).
-- **SCHED-05 (Batch Database Commit):** Verify that check results are committed in batch transactions (`DB::transaction`) to minimize SQLite write operations.
+### 2.2 Scheduler, Concurrency, and Deadline Suite (Phase 02 Gate)
+- **SCHED-01 (Overlap Prevention):** When `sitepulse:check-monitors` is running, a concurrent invocation detects active lock and exits immediately with code `0`.
+- **SCHED-02 (Mutex Lock Expiration TTL):** Simulate an abandoned lock past the 10-minute TTL; verify the subsequent run reclaims the lock without manual intervention.
+- **SCHED-03 (Monotonic Deadline Cutoff):** Simulate slow sockets; verify that when monotonic time hits 45s, no new batches are initiated, and in-flight handles are cleanly cancelled by the 50s ceiling.
+- **SCHED-04 (Partial Batch Persistence):** In a batch with 3 completed and 2 in-flight checks at cutoff, verify the 3 completed checks are committed in `DB::transaction`, while the 2 in-flight checks remain due without recording false failures.
+- **SCHED-05 (Interrupted Execution Recovery):** Terminate a worker process mid-run; verify that uncompleted monitors retain due status and are prioritized on the next run (`ORDER BY last_checked_at ASC NULLS FIRST`).
+- **SCHED-06 (Batch Persistence Benchmark):** Benchmark atomic batch-write transactions against sequential single-row writes under 50-monitor simulated load to measure disk I/O differences.
 
 ### 2.3 Incident State Machine & Notification Suite (Phase 02 & Phase 04 Gate)
 - **STATE-01 (Flapping Suppression):** Alternating success $\to$ failure $\to$ success results in 0 state changes and 0 notifications.
 - **STATE-02 (Outage Confirmation):** $N = 2$ consecutive failures transitions monitor from `OPERATIONAL` to `DOWN`, creates an open `Incident`, and dispatches exactly 1 alert email.
 - **STATE-03 (Prolonged Outage Deduplication):** Checks 3, 4, 5 failing while in `DOWN` state trigger 0 additional emails.
 - **STATE-04 (Recovery Confirmation):** $M = 2$ consecutive successes transitions monitor from `DOWN` to `OPERATIONAL`, closes the `Incident`, calculates duration, and dispatches exactly 1 recovery email.
-- **STATE-05 (Idempotency Record):** Verify unique constraint on `incident_notifications(incident_id, type)`.
+- **STATE-05 (Idempotency Record):** Verify unique composite constraint on `incident_notifications(incident_id, type)`.
 
 ### 2.4 Browser Smoke & Accessibility Suite (Phase 03 Gate)
 - **UI-01 (Monitor CRUD):** Add, view, edit, pause, resume, delete monitor via web dashboard.
 - **UI-02 (Keyboard Accessibility):** Verify full keyboard tab navigation across all interactive controls.
-- **UI-03 (WCAG 2.1 AA Contrast):** Status badges must use high-contrast colors and distinct shape/text labels (not color alone).
+- **UI-03 (WCAG 2.1 AA Contrast):** Status badges must use high-contrast colors and distinct shape/text labels.
 - **UI-04 (Mobile Responsive):** Dashboard layout renders cleanly on viewport width $\le 375\text{px}$.
 
 ---

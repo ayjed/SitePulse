@@ -1,6 +1,6 @@
 # Product Requirements Document
 
-**Status:** IN REVIEW (Phase 00 Architecture Revision)  
+**Status:** IN REVIEW (Phase 00 Final Technical Corrections)  
 **Date:** 2026-11-23  
 **Target Milestone:** v1.0.0 MVP  
 
@@ -39,17 +39,17 @@ SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor th
 - **State Control:** Pause and resume active monitoring.
 - **Configurable Attributes:**
   - Friendly display name (e.g., "Client Store Production").
-  - Target URL (strictly `http://` or `https://`).
+  - Target URL (strictly canonical `http://` or `https://` without credentials).
   - Check interval: selectable options (1, 5, 10, 15, 30, 60 minutes).
   - Expected HTTP response status code range (default: `200–299`; customizable for intentional 301/401 checks).
   - Request timeout: configurable between 2 and 15 seconds (default: 10 seconds).
   - Active toggle (boolean).
 
 ### 3.3 HTTP Health Check Engine (FR-3)
-- **Outbound Check Execution:** Executes periodically via cron.
+- **Outbound Check Execution:** Executes periodically via cron governed by monotonic execution deadlines.
 - **User-Agent:** Identifies explicitly as `SitePulse/1.0 (+https://github.com/.../sitepulse)`.
-- **Metrics Collected:** HTTP status code, total response time (latency in milliseconds), timestamp, failure classification (`TIMEOUT`, `DNS_FAILURE`, `CONNECTION_REFUSED`, `HTTP_ERROR`, `SSRF_BLOCKED`, `TLS_ERROR`), and sanitized error message.
-- **Security & Network Guardrails:** Strictly routed through `SafeHttpClient` with DNS pre-validation, private IP blocking, socket IP pinning, proxy variable isolation, and hop-by-hop redirect inspection (see `docs/SECURITY.md`).
+- **Metrics Collected:** HTTP status code, total response time (latency in milliseconds), timestamp, failure classification (`TIMEOUT`, `DNS_FAILURE`, `CONNECTION_REFUSED`, `HTTP_ERROR`, `SSRF_BLOCKED`, `TLS_ERROR`, `DEADLINE_EXCEEDED`), and sanitized error message.
+- **Security & Network Guardrails:** Strictly routed through `SafeHttpClient` with canonical URL validation, rejection of ambiguous IP representations, DNS pre-validation, private IP blocking, socket IP pinning, connected peer verification, proxy isolation, and hop-by-hop redirect inspection (see `docs/SECURITY.md`).
 
 ### 3.4 Outage Detection & Incident State Machine (FR-4)
 - **Flapping Prevention:** Outage confirmation requires **$N = 2$ consecutive failed checks**. Recovery confirmation requires **$M = 2$ consecutive successful checks**.
@@ -81,20 +81,20 @@ SitePulse provides a self-hosted, lightweight, and trustworthy uptime monitor th
 
 ### 3.8 Storage & Data Pruning (FR-8)
 - **Default Database:** SQLite with Write-Ahead Logging (WAL) enabled; MySQL 8.0+ supported.
-- **Batch Persistence:** Check results are committed in batch transactions to prevent lock contention.
+- **Batch Persistence:** Check results are committed in batch transactions to reduce lock contention.
 - **Automated Retention:** Daily scheduled command (`sitepulse:prune-checks`) purging raw check results older than 30 days. Historical `incidents` records are preserved permanently.
 
 ---
 
-## 4. Non-Functional Requirements
+## 4. Measurable Non-Functional Targets
 
 | Metric | Target | Verification Method |
 |---|---|---|
-| **Security (SSRF)** | 100% block rate for private/loopback/cloud metadata IPs | Negative security test suite with mock DNS/sockets |
-| **Execution Memory** | $\le 45$ MB per cron check execution | CLI memory profiling during check runs |
-| **Check Latency Budget** | 50 monitors checked in $\le 25$ seconds | Asynchronous connection pooling (concurrency 5–10) |
+| **Security (SSRF)** | 100% block rate for private/loopback/cloud metadata IPs and ambiguous formats | Negative security test suite (SEC-01 to SEC-16) with mock DNS/sockets |
+| **Execution Memory** | Target $\le 45$ MB peak per cron execution | CLI memory profiling during check runs in CI |
+| **Check Latency Budget** | Target 50 monitors checked in $\le 25$ seconds | Asynchronous connection pooling (concurrency 5–10) |
 | **Accessibility** | WCAG 2.1 AA compliant | Axe core audit and keyboard navigation test |
-| **Storage Growth** | $\le 50$ MB database size for 10 monitors over 30 days | SQLite disk measurement with 30-day retention |
+| **Storage Growth** | Target $\le 50$ MB database size for 10 monitors over 30 days | Measured under SQLite WAL in Phase 02 |
 | **Deterministic Behavior** | 0 duplicate notifications during simulated flapping | Incident state machine unit test suite |
 
 ---

@@ -1,6 +1,6 @@
 # Security Notes and Threat Model
 
-**Status:** IN REVIEW (Phase 00 Architecture Revision)  
+**Status:** IN REVIEW (Phase 00 Final Technical Corrections)  
 **Date:** 2026-11-23  
 
 ---
@@ -12,8 +12,8 @@ Because the application accepts user-specified URLs and executes automated outbo
 1. Scanning internal networks and probing local ports.
 2. Interacting with local loopback services (Redis on `6379`, MySQL on `3306`, Docker on `2375`, local administrative panels).
 3. Querying cloud infrastructure metadata endpoints (`http://169.254.169.254/latest/meta-data/`) to exfiltrate IAM roles, private keys, or instance tokens.
-4. Bypassing network boundaries via DNS rebinding or redirect chaining.
-5. Leaking requests through or attacking host-configured proxy servers.
+4. Bypassing network boundaries via DNS rebinding, nonstandard IP notations, or redirect chaining.
+5. Exploiting host proxy settings to bypass egress restrictions.
 6. Launching Denial-of-Service attacks against internal or external infrastructure via unbounded responses or connection exhaustion.
 
 ---
@@ -24,10 +24,11 @@ Because the application accepts user-specified URLs and executes automated outbo
 |---|---|---|---|
 | **Direct Loopback / Private IP Access** | User sets monitor to `http://127.0.0.1`, `http://localhost`, `http://[::1]`, or `http://192.168.1.1`. | Critical | Reject URL if host resolves to loopback, private, link-local, multicast, or reserved CIDRs. |
 | **Cloud Metadata Exfiltration** | Target points to `http://169.254.169.254/` (AWS/GCP/DigitalOcean metadata) or `metadata.google.internal`. | Critical | Explicitly block `169.254.0.0/16`, link-local ranges, and cloud metadata hostnames. |
-| **Alternate IP Representations** | Target uses hex (`0x7f000001`), octal (`017700000001`), decimal integer (`2130706433`), or IPv4-mapped IPv6 (`::ffff:127.0.0.1`). | High | Canonicalize and parse IP addresses using standard PHP network functions (`inet_pton`, `filter_var`) before evaluation. |
+| **Ambiguous / Nonstandard IP Representations** | Target uses hex (`0x7f000001`), octal (`017700000001`), decimal dword (`2130706433`), or leading zeros (`0127.0.0.1`). | High | Strictly reject nonstandard IP formats; enforce canonical 4-octet decimal notation without leading zeros. |
 | **DNS Rebinding (TOCTOU)** | Attacker's domain resolves to public IP during validation, but returns `127.0.0.1` when cURL establishes the TCP socket. | Critical | Resolve DNS prior to connection; pin the validated IP to the socket connection via cURL's `CURLOPT_RESOLVE` flag. |
+| **Connected Peer IP Divergence** | TCP socket connects to an unvalidated IP due to network redirection or internal routing quirks. | Critical | Inspect `CURLINFO_PRIMARY_IP` post-connection; abort immediately if connected IP is restricted or mismatches pinned IP. |
+| **Host Proxy Variable Exploitation** | Host environment sets `http_proxy` / `ALL_PROXY`, routing requests through an internal corporate proxy and bypassing local checks. | High | Explicitly set `CURLOPT_PROXY => ''` and `CURLOPT_NOPROXY => '*'` on monitoring handles to ignore environment proxies. |
 | **Redirect to Internal Network** | Public URL `https://example.com/check` returns a 302 redirect to `http://127.0.0.1:8000/admin`. | Critical | Disable automatic cURL redirects (`CURLOPT_FOLLOWLOCATION = false`). Follow redirects manually in PHP code (max 3 hops), re-validating the full URL, DNS, and IP address at each hop. |
-| **Host Proxy Variable Exploitation** | Host environment sets `http_proxy` / `ALL_PROXY`, routing requests through an internal corporate proxy and bypassing local checks. | High | Explicitly set `CURLOPT_PROXY => ''` on monitoring handles to ignore environment proxies. |
 | **Internal Port Scanning** | Target uses non-standard ports (e.g., `http://example.com:22` or `http://example.com:6379`). | High | Enforce port allowlist (80, 443, 8080, 8443 by default). Explicitly reject known sensitive services. |
 | **Protocol Smuggling** | Target specifies `file://`, `gopher://`, `dict://`, `ftp://`, or `php://`. | Critical | Strict protocol allowlist: only `http` and `https` allowed. |
 | **Denial of Service (Slowloris / Stream)** | Target returns an infinite stream or takes minutes to respond, exhausting worker processes. | High | Enforce strict timeouts: 5s connection timeout, 10s total transfer timeout, low-speed abort limits. |
@@ -37,8 +38,15 @@ Because the application accepts user-specified URLs and executes automated outbo
 
 ## 3. Comprehensive SSRF Defense Specification
 
-### 3.1 Disallowed IP Ranges (CIDR Blocklist)
-The `SafeHttpClient` must validate all resolved IP addresses (IPv4 and IPv6) against the following CIDRs prior to establishing any network connection:
+### 3.1 Strict Canonical URL & IP Validation
+- **URL Syntax:** Strictly lowercase `http://` or `https://`. No credentials in URLs (`user:pass@`). FQDNs must conform to RFC 1123.
+- **Rejection of Ambiguous IPv4 Representations:**
+  - IPv4 addresses must strictly match 4 decimal octets: `^([0-9]{1,3}\.){3}[0-9]{1,3}$` where each octet is 0–255.
+  - **Leading zeros are strictly rejected** (e.g., `0127.0.0.1`, `127.000.000.001` are rejected to prevent octal parsing discrepancies in underlying C libraries).
+  - Hexadecimal (`0x`), octal, single integer/dword (`2130706433`), and mixed radix notations are strictly rejected.
+
+### 3.2 Disallowed IP Ranges (CIDR Denylist)
+All resolved IP addresses (IPv4 and IPv6) are evaluated against:
 
 #### IPv4 Denylist:
 - `0.0.0.0/8` (Current network / default route)
@@ -68,8 +76,7 @@ The `SafeHttpClient` must validate all resolved IP addresses (IPv4 and IPv6) aga
 - `fe80::/10` (Link-local unicast RFC 4291)
 - `ff00::/8` (Multicast RFC 4291)
 
-### 3.2 DNS Pinning Implementation (`CURLOPT_RESOLVE`)
-To eliminate the window for DNS rebinding attacks:
+### 3.3 DNS Pinning & Connected Peer Verification
 ```php
 // 1. Resolve host to IP addresses
 $ips = dns_get_record($host, DNS_A + DNS_AAAA);
@@ -82,40 +89,36 @@ foreach ($ips as $record) {
     }
 }
 
-// 3. Pin the connection to the validated IP
+// 3. Pin connection to validated IP
 $chosenIp = $ips[0]['ip'] ?? $ips[0]['ipv6'];
 $curlResolveRule = "{$host}:{$port}:{$chosenIp}";
 curl_setopt($ch, CURLOPT_RESOLVE, [$curlResolveRule]);
+
+// 4. Post-connection verification of connected peer
+$connectedIp = curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+if ($this->isIpBlocked($connectedIp) || $connectedIp !== $chosenIp) {
+    throw new BlockedDestinationException("Connected socket peer violates security policy.");
+}
 ```
 
-### 3.3 Proxy Environment Variable Isolation
-To ensure requests are not unexpectedly forwarded through local or corporate proxies defined in the operating system environment:
+### 3.4 Proxy Environment Variable Isolation
 ```php
 curl_setopt($ch, CURLOPT_PROXY, '');
+curl_setopt($ch, CURLOPT_NOPROXY, '*');
 ```
 
-### 3.4 Manual Redirect Execution
+### 3.5 Manual Redirect Execution
 Automatic redirection (`CURLOPT_FOLLOWLOCATION = true`) is prohibited.
-Redirects are followed step-by-step:
-1. Check response status code for 301, 302, 303, 307, 308.
-2. Read `Location` response header.
-3. Parse and resolve relative redirect URLs against the base URL.
-4. Increment redirect counter (max 3 hops).
-5. Pass the redirect target URL back into step 1 of full safety validation.
+Redirects are traversed step-by-step up to max 3 hops, re-executing full canonical URL, DNS, IP, and peer validation on each hop.
 
 ---
 
 ## 4. Application Security & Web Hardening
-
-### 4.1 Authentication & Session Protection
 - Single-owner admin model with passwords hashed via `bcrypt` (work factor 12) or `argon2id`.
 - Login rate-limiting enforced via Laravel's `RateLimiter`: max 5 attempts per minute per IP.
 - Session cookies configured with `HttpOnly`, `SameSite=Lax` (or `Strict`), and `Secure` (when HTTPS is present).
 - CSRF token validation on all state-changing routes (POST/PUT/DELETE).
-
-### 4.2 Error Handling & Information Disclosure
-- Outbound network errors (e.g., DNS failures, connection timeouts) are logged internally with technical details.
-- User-facing UI displays categorized, sanitized failure reasons (`DNS Failure`, `Timeout`, `Connection Refused`, `Blocked Destination`) without exposing internal server stack traces or internal IP topologies.
+- Minimal error exposure (sanitized user-facing errors; detailed internal error logs).
 
 ---
 
@@ -127,13 +130,15 @@ Redirects are followed step-by-step:
 | **SEC-02** | Direct IPv6 Loopback | `http://[::1]/` | Request blocked before socket open | Throws `BlockedDestinationException`, 0 outbound packets |
 | **SEC-03** | RFC 1918 Private IP | `http://192.168.1.1/`, `http://10.0.0.1/` | Request blocked | Throws `BlockedDestinationException` |
 | **SEC-04** | Cloud Metadata IP | `http://169.254.169.254/latest/` | Request blocked | Throws `BlockedDestinationException` |
-| **SEC-05** | Dword / Hex IP Literal | `http://2130706433/`, `http://0x7f000001/` | Input validation rejection | URL rejected during validation or IP normalization |
-| **SEC-06** | DNS Resolving to Private IP | `http://rebinding.test/` resolving to `10.1.2.3` | DNS check fails | Throws `BlockedDestinationException` |
-| **SEC-07** | Dual-homed Split DNS | DNS returns `198.51.100.1` AND `127.0.0.1` | Check fails if any IP is restricted | Entire destination rejected |
-| **SEC-08** | Redirect to Private Network | Public URL 302-redirects to `http://127.0.0.1/` | Hop 1 blocked | Hop 1 intercepts `Location`, validates, aborts |
-| **SEC-09** | Redirect Loop | Target cycles between `/a` and `/b` | Max redirects exceeded | Aborts after 3 hops with `MAX_REDIRECTS_EXCEEDED` |
-| **SEC-10** | Sensitive Internal Port | `http://example.com:22/`, `http://example.com:6379/` | Port rejected | Validation fails, 0 outbound packets |
-| **SEC-11** | Non-HTTP Protocol | `file:///etc/passwd`, `gopher://...` | Scheme rejected | Validation fails |
-| **SEC-12** | Host Proxy Override | Host has `http_proxy=internal-proxy:8080` | Proxy ignored | Request does not traverse internal proxy |
-| **SEC-13** | Slowloris / Timeout | Server delays response past 10s | Connection cleanly aborted | Check recorded as `TIMEOUT`, worker remains alive |
-| **SEC-14** | Giant / Stream Response | Server streams infinite zeroes | Body buffer capped at 500 KB | Transfer aborted, memory usage does not spike |
+| **SEC-05** | Ambiguous IP Literals (Hex/Octal/Dword) | `http://2130706433/`, `http://0x7f000001/` | Validation rejection | URL rejected during canonical validation |
+| **SEC-06** | Ambiguous IP (Leading Zeros) | `http://0127.0.0.1/`, `http://127.000.000.001/` | Validation rejection | URL rejected due to leading zeros |
+| **SEC-07** | DNS Resolving to Private IP | `http://rebinding.test/` resolving to `10.1.2.3` | DNS check fails | Throws `BlockedDestinationException` |
+| **SEC-08** | Dual-homed Split DNS | DNS returns `198.51.100.1` AND `127.0.0.1` | Check fails if any IP is restricted | Entire destination rejected |
+| **SEC-09** | Redirect to Private Network | Public URL 302-redirects to `http://127.0.0.1/` | Hop 1 blocked | Hop 1 intercepts `Location`, validates, aborts |
+| **SEC-10** | Redirect Loop | Target cycles between `/a` and `/b` | Max redirects exceeded | Aborts after 3 hops with `MAX_REDIRECTS_EXCEEDED` |
+| **SEC-11** | Sensitive Internal Port | `http://example.com:22/`, `http://example.com:6379/` | Port rejected | Validation fails, 0 outbound packets |
+| **SEC-12** | Non-HTTP Protocol | `file:///etc/passwd`, `gopher://...` | Scheme rejected | Validation fails |
+| **SEC-13** | Host Proxy Override | Host has `http_proxy=internal-proxy:8080` | Proxy ignored | Request does not traverse internal proxy |
+| **SEC-14** | Connected Peer IP Mismatch | Socket connects to IP differing from pinned IP | Request aborted | Discards response, records security violation |
+| **SEC-15** | Slowloris / Timeout | Server delays response past 10s | Connection cleanly aborted | Check recorded as `TIMEOUT`, worker remains alive |
+| **SEC-16** | Giant / Stream Response | Server streams infinite zeroes | Body buffer capped at 500 KB | Transfer aborted, memory usage does not spike |

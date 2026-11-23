@@ -12,13 +12,15 @@ Validate that a secure and useful monitoring MVP can run on the target hosting m
 - [x] Decide minimum deployment requirements (PHP CLI/cron/mail/database).
 - [x] Formulate hosting feasibility specifications ([`docs/HOSTING_REQUIREMENTS.md`](../HOSTING_REQUIREMENTS.md)).
 - [x] Evaluate application framework baseline: Laravel 13 on PHP 8.3+.
+- [x] Record dependency compatibility requirements: Pest 4, PHPUnit 11+, Livewire 4.
 - [x] Confirm MVP features and explicit non-goals.
 - [x] Map data model: monitor, check result, incident, notification.
-- [x] Formulate comprehensive threat model & 11-layer SSRF defense ([`docs/SECURITY.md`](../SECURITY.md)).
+- [x] Formulate comprehensive threat model, strict canonical IP validation, and 16-point security test matrix ([`docs/SECURITY.md`](../SECURITY.md)).
 - [x] Specify initial alert and outage state rules ($N=2$ fail threshold, idempotency).
-- [x] Specify scheduler concurrency, timeout budgets, interruption recovery, and batch writes.
-- [x] Record critical architecture decisions as ADRs (ADR-0001, ADR-0002, ADR-0003, ADR-0004).
+- [x] Specify monotonic scheduler deadline (45s/50s), handle cancellation, lock TTL lifecycle, and batch write targets.
+- [x] Record critical architecture decisions as ADRs (ADR-0001 to ADR-0004).
 - [x] Develop comprehensive test plan & acceptance criteria ([`docs/TEST_PLAN.md`](../TEST_PLAN.md)).
+- [x] Confirm Git environment and remote tracking status.
 
 ## Acceptance criteria
 - [ ] Requirements and non-goals agreed.
@@ -42,11 +44,11 @@ Validate that a secure and useful monitoring MVP can run on the target hosting m
 ## Review log
 - 2026-11-23: Initial draft created; no approval claimed.
 - 2026-11-23: Phase 00 discovery review completed.
-- 2026-11-23: Phase 00 architecture revision completed:
-  - Framework baseline updated to Laravel 13 on PHP 8.3+.
-  - Comprehensive 11-layer SafeHttpClient SSRF defense design specified with 14 concrete security test scenarios.
-  - Scheduler concurrency (5 workers), per-request timeouts, 50s execution cap, mutex locking, interruption recovery, and batch database transactions defined.
-  - Dedicated `docs/HOSTING_REQUIREMENTS.md` created.
-  - Test plan updated with exact acceptance criteria.
-  - Workspace Git environment investigated and reported.
-  - Phase remains `IN PROGRESS` awaiting maintainer gate review.
+- 2026-11-23: Phase 00 architecture revision completed.
+- 2026-11-23: Phase 00 final technical corrections completed:
+  - Dependency baseline updated to Laravel 13, Pest 4 (PHPUnit 11+), and Livewire 4 compatibility requirements.
+  - Monotonic scheduler deadline (`hrtime`), HTTP handle cancellation, partial batch commit, and lock TTL lifecycle defined.
+  - Strict canonical URL validation, rejection of ambiguous IP formats (leading zeros, hex, octal, dword), and connected peer IP verification (`CURLINFO_PRIMARY_IP`) specified.
+  - Performance targets framed with empirical verification requirements.
+  - Git remote (`origin` tracking `https://github.com/ayjed/SitePulse-Planning-Starter.git` on branch `main`) confirmed.
+  - Phase remains `IN PROGRESS` / `IN REVIEW` awaiting maintainer gate review.

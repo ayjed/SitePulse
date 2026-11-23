@@ -1,6 +1,6 @@
-# ADR-0003: Database Engine, Concurrency, and Data Retention Policy
+# ADR-0003: Database Storage Strategy, Concurrency, and Data Retention
 
-**Status:** PROPOSED (Phase 00 Architecture Revision)  
+**Status:** PROPOSED (Phase 00 Final Technical Corrections)  
 **Date:** 2026-11-23  
 **Deciders:** Lead Architect, Maintainer (@ayjed)
 
@@ -10,7 +10,7 @@ For example:
 - 10 monitors checked every 1 minute generate 14,400 check records per day (~432,000 per month).
 - 25 monitors checked every 1 minute generate 36,000 records per day (>1,000,000 per month).
 
-The application must run smoothly on low-resource environments (entry-level VPS or constrained shared hosting) without complex administration, while preventing database bloat and file lock contention.
+The application must run reliably on low-resource environments (entry-level VPS or constrained shared hosting) without complex administration, while managing database size and minimizing file lock contention.
 
 ## Options Considered
 
@@ -21,10 +21,10 @@ The application must run smoothly on low-resource environments (entry-level VPS 
 2. **Option B: SQLite as Default with WAL Mode + Full MySQL/PostgreSQL Compatibility via Eloquent (Selected)**
    - *Pros:*
      - Zero-configuration setup: a single SQLite database file allows SitePulse to work out of the box.
-     - When Write-Ahead Logging (`PRAGMA journal_mode = WAL;`) and busy timeout (`PRAGMA busy_timeout = 5000;`) are configured, SQLite handles concurrent CLI writes and web dashboard reads smoothly.
+     - When Write-Ahead Logging (`PRAGMA journal_mode = WAL;`) and busy timeout (`PRAGMA busy_timeout = 5000;`) are configured, SQLite write lock contention is substantially reduced.
      - Laravel 13's Eloquent migrations provide first-class compatibility with MySQL/MariaDB and PostgreSQL for users who prefer external databases.
    - *Cons:*
-     - SQLite file-locking under heavy concurrent writers can raise `SQLITE_BUSY` if WAL mode is not enabled or if writes take too long.
+     - SQLite file-locking under heavy concurrent writers can still raise `SQLITE_BUSY` if transactions take too long or concurrency is unconstrained.
 
 ## Decision
 1. **Default Database Engine:** Default to SQLite for zero-friction installation.
@@ -32,20 +32,20 @@ The application must run smoothly on low-resource environments (entry-level VPS 
    - `journal_mode = WAL`
    - `busy_timeout = 5000` (wait up to 5 seconds for write locks rather than failing immediately)
    - `synchronous = NORMAL`
-3. **Batch History Write Strategy:**
-   - To eliminate disk I/O churn and SQLite lock contention, check results from the concurrent worker pool are buffered in memory and committed in a single atomic database transaction (`DB::transaction(...)`) per worker batch (5–10 checks).
-   - This reduces SQLite disk sync operations from 10 individual writes to 1 write per batch.
-4. **Database Portability:** Write all migrations and database queries using standard Laravel Schema Builder and Eloquent ORM to maintain 100% compatibility with MySQL 8.0+ / MariaDB 10.5+.
+3. **Batch History Write Strategy (Targeted Optimization):**
+   - To reduce disk I/O churn and SQLite write lock contention, check results from the concurrent worker pool are buffered in memory and committed in a single database transaction (`DB::transaction(...)`) per worker batch (5–10 checks).
+   - *Note on Performance Claims:* Batch writes are an architectural strategy intended to improve write throughput; exact performance improvements and disk I/O reductions require empirical benchmarks during Phase 02.
+4. **Database Portability:** Write all migrations and database queries using standard Laravel Schema Builder and Eloquent ORM to maintain compatibility with MySQL 8.0+ / MariaDB 10.5+. Compatibility requires automated integration testing in CI during Phase 01.
 5. **Data Retention & Automated Pruning:**
    - Raw `check_results` records will have a configurable retention window (default: **30 days**, configurable via `SITEPULSE_HISTORY_RETENTION_DAYS`).
-   - A daily scheduled command (`sitepulse:prune-checks`) will delete check records older than the retention threshold in chunks of 1,000 records.
+   - A daily scheduled command (`sitepulse:prune-checks`) will delete check records older than the retention threshold in chunks.
    - The `incidents` table (outage history, start time, resolution time, duration, root cause) will be retained indefinitely (or for at least 1 year) to ensure long-term reliability trends remain intact without consuming substantial disk space.
 
-## Consequences
-- Fast, zero-maintenance setup for 95% of target users.
-- Predictable database storage footprint: 10 monitors with 30-day retention will occupy under 45 MB of disk space.
-- Advanced users with existing MySQL/MariaDB instances can simply switch `DB_CONNECTION=mysql` in `.env`.
+## Performance & Portability Targets
+- **Storage Target:** Under SQLite with 30-day retention, 10 monitors checked every minute produce $\approx 430\text{K}$ rows/month, with a target storage footprint under 50 MB.
+- **Concurrency Target:** SQLite contention between CLI writes and Web reads is *reduced, not eliminated*. Bounded concurrency (5 workers) and short transaction windows are required to prevent lock starvation.
+- **Benchmarking Requirement:** Measure SQLite throughput and transaction durations under simulated 50-monitor loads in Phase 02.
 
-## Evidence & Verification
-- Verify SQLite WAL configuration during Phase 01 scaffolding.
-- Integration tests in Phase 02 must verify that `sitepulse:prune-checks` successfully prunes expired check results without removing active or historical incidents.
+## Evidence & Verification Plan
+- Phase 01: Verify SQLite WAL configuration and execute automated migrations in CI.
+- Phase 02: Implement and benchmark batch-write transactions against sequential writes; verify `sitepulse:prune-checks` deletes expired check results without removing active incidents.

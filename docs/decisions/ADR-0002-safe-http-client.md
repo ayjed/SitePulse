@@ -1,6 +1,6 @@
 # ADR-0002: Safe HTTP Client and SSRF Protection Architecture
 
-**Status:** PROPOSED (Phase 00 Final Technical Corrections)  
+**Status:** ACCEPTED  
 **Date:** 2026-11-23  
 **Deciders:** Lead Architect, Maintainer (@ayjed)
 

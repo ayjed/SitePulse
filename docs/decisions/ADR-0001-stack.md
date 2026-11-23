@@ -1,6 +1,6 @@
 # ADR-0001: Application Stack, Runtime, and Dependency Compatibility
 
-**Status:** PROPOSED (Phase 00 Final Technical Corrections)  
+**Status:** ACCEPTED  
 **Date:** 2026-11-23  
 **Deciders:** Lead Architect, Maintainer (@ayjed)
 
@@ -15,7 +15,7 @@ Following Phase 00 technical reviews, we have established the application framew
 |---|---|---|
 | **PHP Runtime** | **PHP 8.3+ / 8.4** | Baseline runtime. Provides typed class constants, dynamic class constant fetch, `json_validate()`, and modern memory/performance enhancements. |
 | **Framework Core** | **Laravel 13.x** | Requires PHP 8.3+. Standardizes on lean application structure, modern routing, integrated task scheduling (`Schedule`), Eloquent ORM, and first-class mail notifications. |
-| **Testing Harness** | **Pest 4.x (PHPUnit 11+)** | Pest 4 is the testing baseline for PHP 8.3+ and Laravel 13 (subject to Composer resolution). Powered by PHPUnit 11+, Pest 4 provides unified unit, integration, and Playwright-backed browser smoke testing. |
+| **Testing Harness** | **Pest 4.x (with PHPUnit 12)** | Pest 4 with PHPUnit 12 is the testing baseline for PHP 8.3+ and Laravel 13 (actual package resolution verified in Phase 01). Powered by PHPUnit 12, Pest 4 provides unified unit, integration, and Playwright-backed browser smoke testing. |
 | **Frontend UI** | **Blade + Tailwind CSS + Livewire 4.x** | Server-rendered Blade components styled with Tailwind CSS via Vite. Official compatibility for Laravel 13 requires **Livewire v4** (e.g. `^4.2`, which introduced explicit Laravel 13 support and reactive security hardenings). If Livewire 4 introduces unresolved dependency friction during Phase 01 Composer resolution, server-rendered Blade with standard Alpine.js/fetch polling serves as the zero-dependency fallback. |
 | **Default Database** | **SQLite 3.35.0+** | Zero-configuration single-file database. Target configuration uses Write-Ahead Logging (`WAL`) mode and busy timeouts to reduce write contention between CLI checks and web reads. |
 | **Alternate Database** | **MySQL 8.0+ / MariaDB 10.5+** | Portable via standard Laravel Eloquent migrations; cross-database compatibility requires automated integration testing in CI during Phase 01. |
@@ -42,7 +42,7 @@ Adopt **Laravel 13.x on PHP 8.3+**:
 1. **Runtime:** PHP 8.3+ with required extensions: `curl`, `pdo_sqlite`, `pdo_mysql`, `mbstring`, `openssl`, `xml`, `bcmath`, `filter`, `ctype`, `tokenizer`, `session`.
 2. **Framework:** Laravel 13.x.
 3. **Frontend:** Server-rendered Blade components styled with Tailwind CSS; Livewire 4 (`^4.2`) evaluated for dynamic metrics with Blade polling fallback.
-4. **Testing Suite:** Pest 4.x (built on PHPUnit 11+, subject to Composer resolution).
+4. **Testing Suite:** Pest 4.x with PHPUnit 12 (actual package resolution verified in Phase 01).
 5. **Database Driver:** SQLite as zero-configuration default; MySQL 8.0+ / MariaDB 10.5+ fully supported via integration tests.
 6. **Task Scheduling:** System cron invoking `php artisan schedule:run` once per minute.
 7. **Hosting Targets:** Documented in `docs/HOSTING_REQUIREMENTS.md`. Shared hosting compatibility is an engineering target requiring real-world deployment testing.

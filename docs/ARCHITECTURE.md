@@ -19,7 +19,7 @@ flowchart TD
         subgraph Monitoring Engine
             CheckCmd --> Mutex[Schedule Mutex withoutOverlapping 10m TTL]
             Mutex --> Timer[Monotonic Deadline hrtime 45s/50s]
-            Timer --> Selector[Monitor Selector: Due Checks ORDER BY last_checked_at ASC]
+            Timer --> Selector[Monitor Selector: Due Checks ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END, last_checked_at ASC]
             Selector --> Pool[Bounded Worker Pool: Concurrency 5]
             Pool --> SafeClient[SafeHttpClient Service]
             SafeClient -->|1. Canonical URL & Scheme| Guard1[Canonical URL Guard]
@@ -87,7 +87,11 @@ flowchart TD
 - **Recovery from Forced Termination:**
   - If an execution is terminated abruptly (`SIGKILL`, host process manager):
     - Unchecked or interrupted monitors retain their older `last_checked_at` timestamp.
-    - On the subsequent run, due monitors are selected with `ORDER BY last_checked_at ASC NULLS FIRST`, guaranteeing that interrupted checks are prioritized.
+    - On the subsequent run, due monitors are selected using a cross-database portable strategy:
+      ```sql
+      ORDER BY (CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END) ASC, last_checked_at ASC
+      ```
+      This ANSI SQL construct runs identically on both SQLite and MySQL/MariaDB (avoiding MySQL syntax errors with `NULLS FIRST`), guaranteeing that never-checked monitors (`NULL`) and longest-interrupted monitors are prioritized first.
     - State transitions in the Incident State Machine only occur on committed check results, preventing ghost outage states.
 - **Worker Pool Concurrency:** Bounded pool of **5 concurrent requests** (configurable up to 10 via `SITEPULSE_MAX_CONCURRENCY`).
 - **Per-Request Timeouts:** DNS: 2s max; Connect/TLS: 5s max; Total Transfer: 10s default (ceiling: 15s); Body buffer cap: 500 KB.

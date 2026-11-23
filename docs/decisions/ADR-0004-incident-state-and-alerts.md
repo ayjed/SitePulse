@@ -1,6 +1,6 @@
 # ADR-0004: Incident State Machine, Flapping Mitigation, and Notification Strategy
 
-**Status:** PROPOSED  
+**Status:** ACCEPTED  
 **Date:** 2026-11-23  
 **Deciders:** Lead Architect, Maintainer (@ayjed)
 

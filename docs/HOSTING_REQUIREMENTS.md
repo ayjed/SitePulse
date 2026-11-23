@@ -49,7 +49,7 @@ Shared hosting compatibility is an **engineering target** that requires empirica
 - **Composer Version:** Composer 2.7+ on the host (or deployment via pre-packaged release zip with pre-built `vendor/` directory).
 - **Dependency Baseline:**
   - `laravel/framework`: `^13.0`
-  - `pestphp/pest`: `^4.0` (with compatible `phpunit/phpunit: ^11.0 || ^12.0`, subject to Composer resolution)
+  - `pestphp/pest`: `^4.0` (with `phpunit/phpunit: ^12.0`, actual package resolution verified in Phase 01)
   - `livewire/livewire`: `^4.2` (subject to Composer resolution; Blade + Tailwind polling as zero-dependency fallback)
 
 ### 3.3 Command Line Interface (CLI) Access

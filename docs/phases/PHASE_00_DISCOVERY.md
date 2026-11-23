@@ -12,7 +12,7 @@ Validate that a secure and useful monitoring MVP can run on the target hosting m
 - [x] Decide minimum deployment requirements (PHP CLI/cron/mail/database).
 - [x] Formulate hosting feasibility specifications ([`docs/HOSTING_REQUIREMENTS.md`](../HOSTING_REQUIREMENTS.md)).
 - [x] Evaluate application framework baseline: Laravel 13 on PHP 8.3+.
-- [x] Record dependency compatibility requirements: Pest 4, PHPUnit 11+, Livewire 4.
+- [x] Record dependency compatibility requirements: Pest 4 with PHPUnit 12, Livewire 4.
 - [x] Confirm MVP features and explicit non-goals.
 - [x] Map data model: monitor, check result, incident, notification.
 - [x] Formulate comprehensive threat model, strict canonical IP validation, and 16-point security test matrix ([`docs/SECURITY.md`](../SECURITY.md)).
@@ -46,9 +46,7 @@ Validate that a secure and useful monitoring MVP can run on the target hosting m
 - 2026-11-23: Phase 00 discovery review completed.
 - 2026-11-23: Phase 00 architecture revision completed.
 - 2026-11-23: Phase 00 final technical corrections completed:
-  - Dependency baseline updated to Laravel 13, Pest 4 (PHPUnit 11+), and Livewire 4 compatibility requirements.
-  - Monotonic scheduler deadline (`hrtime`), HTTP handle cancellation, partial batch commit, and lock TTL lifecycle defined.
-  - Strict canonical URL validation, rejection of ambiguous IP formats (leading zeros, hex, octal, dword), and connected peer IP verification (`CURLINFO_PRIMARY_IP`) specified.
-  - Performance targets framed with empirical verification requirements.
-  - Git remote (`origin` tracking `https://github.com/ayjed/SitePulse-Planning-Starter.git` on branch `main`) confirmed.
+  - Testing baseline specified as Pest 4 with PHPUnit 12 (actual package resolution verified in Phase 01).
+  - Replaced `NULLS FIRST` with cross-database portable SQL ordering (`ORDER BY (CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END) ASC, last_checked_at ASC`) compatible with SQLite and MySQL.
+  - Added cross-database due monitor prioritization tests (DB-01) to test plan.
   - Phase remains `IN PROGRESS` / `IN REVIEW` awaiting maintainer gate review.

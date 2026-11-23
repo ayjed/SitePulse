@@ -36,8 +36,8 @@
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
 |---|---|---|---|---|---|
-| D-001 | Framework (Laravel 13 on PHP 8.3+), Pest 4, Livewire 4 & Hosting Targets | Maintainer | PROPOSED | 00 | [ADR-0001](docs/decisions/ADR-0001-stack.md), [HOSTING_REQUIREMENTS](docs/HOSTING_REQUIREMENTS.md) |
-| D-002 | Database (SQLite WAL default + MySQL) & Batch Pruning Targets | Maintainer | PROPOSED | 00 | [ADR-0003](docs/decisions/ADR-0003-data-retention-and-storage.md) |
+| D-001 | Framework (Laravel 13 on PHP 8.3+), Pest 4 with PHPUnit 12, Livewire 4 & Hosting Targets | Maintainer | PROPOSED | 00 | [ADR-0001](docs/decisions/ADR-0001-stack.md), [HOSTING_REQUIREMENTS](docs/HOSTING_REQUIREMENTS.md) |
+| D-002 | Database (SQLite WAL default + MySQL), Portable Monitor Ordering & Batch Pruning | Maintainer | PROPOSED | 00 | [ADR-0003](docs/decisions/ADR-0003-data-retention-and-storage.md) |
 | D-003 | Safe HTTP Client, Strict IP Validation & Peer Verification | Maintainer | PROPOSED | 00 | [ADR-0002](docs/decisions/ADR-0002-safe-http-client.md), [SECURITY](docs/SECURITY.md) |
 | D-004 | Incident State Machine & Notification Deduplication | Maintainer | PROPOSED | 00 | [ADR-0004](docs/decisions/ADR-0004-incident-state-and-alerts.md) |
 
@@ -56,7 +56,7 @@
 | 2026-11-23 | 00 | Planning starter pack initialized | Repository documentation | Initial draft |
 | 2026-11-23 | 00 | Phase 00 architectural discovery review & ADR formulation | Updated PRD, ARCHITECTURE, SECURITY, ADRs 0001–0004 | In Review |
 | 2026-11-23 | 00 | Phase 00 architecture revision | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review |
-| 2026-11-23 | 00 | Phase 00 final technical corrections (Dependencies, Deadlines, Canonical Security, Targets) | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review (Maintainer Gate) |
+| 2026-11-23 | 00 | Phase 00 final sign-off prep: Pest 4 with PHPUnit 12, portable SQL monitor ordering, DB tests added | PRD, ARCHITECTURE, SECURITY, HOSTING_REQUIREMENTS, TEST_PLAN, ADR-0001 to ADR-0003 | In Review (Maintainer Gate) |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

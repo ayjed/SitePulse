@@ -7,7 +7,7 @@
 
 ## 1. Test Levels & Strategy
 
-SitePulse employs an automated test strategy using **Pest 4.x** (built on PHPUnit 11+, subject to Composer resolution) to ensure deterministic behavior across health checks, state transitions, notifications, and security boundaries.
+SitePulse employs an automated test strategy using **Pest 4.x with PHPUnit 12** (actual package resolution verified in Phase 01) to ensure deterministic behavior across health checks, state transitions, notifications, and security boundaries.
 
 ```
        ▲
@@ -51,8 +51,12 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 - **SCHED-02 (Mutex Lock Expiration TTL):** Simulate an abandoned lock past the 10-minute TTL; verify the subsequent run reclaims the lock without manual intervention.
 - **SCHED-03 (Monotonic Deadline Cutoff):** Simulate slow sockets; verify that when monotonic time hits 45s, no new batches are initiated, and in-flight handles are cleanly cancelled by the 50s ceiling.
 - **SCHED-04 (Partial Batch Persistence):** In a batch with 3 completed and 2 in-flight checks at cutoff, verify the 3 completed checks are committed in `DB::transaction`, while the 2 in-flight checks remain due without recording false failures.
-- **SCHED-05 (Interrupted Execution Recovery):** Terminate a worker process mid-run; verify that uncompleted monitors retain due status and are prioritized on the next run (`ORDER BY last_checked_at ASC NULLS FIRST`).
+- **SCHED-05 (Interrupted Execution Recovery):** Terminate a worker process mid-run; verify that uncompleted monitors retain due status and are prioritized on the next run using `ORDER BY (CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END) ASC, last_checked_at ASC`.
 - **SCHED-06 (Batch Persistence Benchmark):** Benchmark atomic batch-write transactions against sequential single-row writes under 50-monitor simulated load to measure disk I/O differences.
+
+### 2.3 Database Portability Suite (Phase 01 & Phase 02 Gate)
+- **DB-01 (Cross-Database Due Monitor Prioritization):** Seed database with monitors having `last_checked_at = NULL` (never checked), older timestamps, and recent timestamps. Execute selector query using `ORDER BY (CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END) ASC, last_checked_at ASC` on both SQLite and MySQL test suites. Verify `NULL` records are returned first, followed by oldest timestamps, with zero syntax errors on both database engines.
+- **DB-02 (Atomic Batch Commit & Rollback):** Verify that check results written inside `DB::transaction` either fully commit or rollback cleanly under simulated database exceptions on both SQLite and MySQL.
 
 ### 2.3 Incident State Machine & Notification Suite (Phase 02 & Phase 04 Gate)
 - **STATE-01 (Flapping Suppression):** Alternating success $\to$ failure $\to$ success results in 0 state changes and 0 notifications.

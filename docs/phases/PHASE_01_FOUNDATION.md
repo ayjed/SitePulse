@@ -13,14 +13,15 @@
 - [x] Resolve dependencies with Composer (Pest 4, PHPUnit 12, Livewire 4).
 - [x] Configure SQLite WAL mode (5000ms busy timeout) and execute baseline migrations.
 - [x] Verify framework boot and pass initial automated tests (`php artisan test`).
-- [ ] Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`).
-- [ ] Set up automated tests, code formatting, and CI workflow.
+- [x] Remediate PHP 8.3+ lockfile compatibility, unsafe seeding, repeatable setup (`APP_KEY` preservation), and `package-lock.json` (`npm ci` + build).
+- [x] Set up automated formatting checks (`pint`) and GitHub Actions CI workflow (`.github/workflows/ci.yml`; remote run pending push).
+- [ ] Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`, deferred until Codex remediation review).
 - [ ] Document installation and startup commands.
 
 ## Exit criteria
-- [ ] Clean install works with documented tool versions.
-- [ ] CI passes on a fresh checkout.
-- [ ] No credentials included in repository.
+- [x] Clean install works with documented tool versions locally (PHP 8.4.28 host / WSL or Linux CI needed on Windows Smart App Control sandboxes).
+- [ ] CI passes on a fresh checkout (`.github/workflows/ci.yml` authored; awaiting GitHub Actions execution after branch push).
+- [x] No credentials or predictable seeded login accounts included in repository.
 - [ ] Maintainer approves evidence and review.
 
 ---
@@ -61,9 +62,10 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - [x] Install Composer 2.7+ (Composer 2.11.2 verified).
 - [x] Execute non-destructive scaffolding.
 - [x] Resolve Pest 4, PHPUnit 12, and Livewire 4 via Composer.
-- [x] Execute `php artisan test` (2 passing).
-- [ ] Implement owner auth migration and `sitepulse:create-owner` command.
-- [ ] Configure GitHub Actions CI workflow.
+- [x] Execute `php artisan test` (expanded to 8 passing tests / 40 assertions).
+- [x] Remediate Codex NO-GO findings (Tasks 1–7 on branch `fix/phase-01-foundation-remediation`).
+- [ ] Run remote GitHub Actions CI workflow (PHP 8.3/8.4 + SQLite + MySQL 8.0) and verify green check.
+- [ ] Implement owner auth migration and `sitepulse:create-owner` command (blocked until remediation review).
 
 ---
 
@@ -111,3 +113,84 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
   - `Tests\Unit\ExampleTest` -> PASS (that true is true)
   - `Tests\Feature\ExampleTest` -> PASS (the application returns a successful response)
   - Result: 2 passed (2 assertions), 0 failures.
+
+---
+
+## Task 03 — Foundation Remediation Log (2026-11-24)
+
+**Branch:** `fix/phase-01-foundation-remediation`  
+**Trigger:** Codex assessment `FAIL / NO-GO` for owner authentication.
+
+### 1. Summary of Codex Findings Addressed
+1. Windows Application Control blocked `php_openssl.dll` and `php_fileinfo.dll` during Codex's test execution.
+2. `composer.lock` resolved `symfony/* v8.1.x` (`php >= 8.4.1`), violating the approved PHP 8.3+ baseline.
+3. `database/seeders/DatabaseSeeder.php` seeded a predictable `'Test User'` (`test@example.com`) using `UserFactory`'s hardcoded `'password'`.
+4. `composer.json` setup scripts (`setup`, `post-create-project-cmd`) invoked `php artisan key:generate` unconditionally, risking overwriting an existing `APP_KEY` on setup retries.
+5. `package-lock.json` was missing and `composer setup` used `npm install` rather than `npm ci`.
+6. No GitHub Actions CI workflow existed to validate PHP 8.3/8.4, extensions, advisory audit, Pint, Pest, frontend build, SQLite WAL, and MySQL compatibility.
+7. Documentation lacked explicit mapping of SQLite defaults vs overrides and mandatory production hardening values (`APP_DEBUG`, HTTPS, `SESSION_SECURE_COOKIE`, `MAIL_MAILER`).
+
+### 2. Task 1 — PHP Runtime & Environment-Specific Blocker Diagnosis
+- **Host Commands Executed:**
+  - `where php` -> `C:\php84\php.exe`, `C:\xampp\php\php.exe`
+  - `php -v` -> `PHP 8.4.28 (cli) (built: Nov 18 2026 00:57:45) (NTS Visual C++ 2022 x64)`
+  - `php --ini` -> `C:\php84\php.ini`
+  - `php -m` -> verified `bcmath`, `curl`, `dom`, `fileinfo`, `filter`, `mbstring`, `openssl`, `pdo_mysql`, `pdo_sqlite`, `xml`, `zip` loaded on unsandboxed host
+  - `php artisan test` -> passes on unsandboxed host
+- **Forensic Root Cause (Environment Restriction, NOT Application Bug):**
+  - Registry `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` has `VerifiedAndReputablePolicyState = 1` (**Windows 11 Smart App Control** enforced under policy `{0283ac0f-fff1-49ae-ada1-8a933130cad6}` / `VerifiedAndReputableDesktop`).
+  - `C:\php84\php.exe`, `C:\php84\ext\php_openssl.dll`, and `C:\php84\ext\php_fileinfo.dll` (official `windows.php.net` ZIP distribution) are **unsigned** (`Authenticode Status = NotSigned`) and carry `ZoneId=3` (`ReferrerUrl=C:\Users\DELL\Downloads\php-8.4.28-nts-Win32-vs17-x64.zip`).
+  - `Microsoft-Windows-CodeIntegrity/Operational` Event IDs `3077`, `3033`, and `3118` at `2026-11-24 22:48:27` (`21:48:27Z`) confirm Windows Smart App Control denied `php_openssl.dll` and `php_fileinfo.dll` with status `0xc0e90002` (`Requested Signing Level: 2`, `Validated Signing Level: 1`, `DefenderCloudCallRequested=true`, `DefenderMadeCloudCall=false`, `EADefenderTrustCached=false`).
+  - **Security Compliance:** Windows Smart App Control protections were **not** disabled or weakened.
+  - **Recommended Trusted Runtimes:** WSL2 Ubuntu (`ubuntu` + signed distro/Ondrej PHP packages; WSL not currently installed on this workstation), Linux Docker containers (`php:8.3-cli` / `php:8.4-cli`; Docker not currently installed on this workstation), enterprise/code-signed Windows PHP runtimes if running natively under Smart App Control, and GitHub Actions `ubuntu-latest` CI.
+
+### 3. Task 2 — Actual Minimum PHP Compatibility (`PHP 8.3+` Retained)
+- **Root Cause:** `laravel/framework` `^13.0` supports `symfony/*: ^7.4.0 || ^8.0.0`, `livewire/livewire` `^4.2` supports `^6.0|^7.0|^8.0`, and `pestphp/pest` `^4.0` supports `symfony/process: ^7.4.13|^8.1.0`. However, `symfony/*` `8.0.0+` raised its own minimum to `php >= 8.4` (`8.1.x` requires `>= 8.4.1`). Initial resolution on PHP 8.4 selected Symfony `8.1.x`, locking out PHP 8.3.
+- **Supported Resolution Applied:** Added explicit `"conflict"` rules in `composer.json` for `symfony/* >= 8.0` and re-locked `composer.lock` to Laravel 13's supported **Symfony 7.4 LTS** branch (`v7.4.17`–`v7.4.23`, `php >= 8.2`), keeping:
+  - `php`: `^8.3` (ADR-0001 preserved without raising PHP requirement)
+  - `laravel/framework`: `v13.44.1` (`^13.0`)
+  - `livewire/livewire`: `v4.4.10` (`^4.2`)
+  - `pestphp/pest`: `v4.7.8` (`^4.0`)
+  - `phpunit/phpunit`: `12.5.33` (`^12.5`)
+  - `laravel/pint`: `v1.32.3` (`^1.27`)
+- Verified programmatically across all packages in `composer.lock`: **0 packages exclude PHP 8.3**.
+- Verified `composer validate --strict` and `composer audit` (0 security vulnerability advisories).
+
+### 4. Tasks 3 & 4 — Safe Seeding & Idempotent Setup
+- Cleared default user creation in `database/seeders/DatabaseSeeder.php`; `php artisan db:seed --force` now inserts 0 users.
+- Replaced hardcoded `'password'` in `database/factories/UserFactory.php` with `Hash::make(Str::random(32))` while preserving factory test ergonomics and explicit password overrides.
+- Created `app/Support/EnvironmentSetup.php` (`EnvironmentSetup::prepare()`) and updated `composer.json` `setup` and `post-create-project-cmd` scripts so:
+  - `.env` is copied from `.env.example` only if missing.
+  - Existing non-empty `APP_KEY` values are detected and preserved across setup retries (`artisan key:generate --force --ansi` runs only when missing/empty).
+  - `database/database.sqlite` is created only when `DB_CONNECTION=sqlite` (excluding `:memory:` and MySQL).
+
+### 5. Task 5 — Frontend Lockfile & Supported Node Versions
+- Generated and tracked `package-lock.json` (88 npm packages, 0 audit vulnerabilities).
+- Updated `composer.json` `setup` script to prefer `npm ci`.
+- Verified `npm ci` and `npm run build` (`vite v7.3.8`, `61 modules transformed`, assets written to `public/build/`).
+- **Supported Frontend Toolchain:** Vite `7.3.8` and `laravel-vite-plugin v2.1.0` require **Node.js `^20.19.0 || >=22.12.0`**. Verified locally on Node `v26.13.0` and npm `11.20.0`; CI targets Node `22` LTS.
+
+### 6. SQLite Defaults vs Overrides & Production Security Requirements
+- **SQLite Defaults vs Environment Overrides:**
+
+| Layer | `DB_CONNECTION` | `DB_DATABASE` | `DB_JOURNAL_MODE` | `DB_BUSY_TIMEOUT` | `DB_SYNCHRONOUS` |
+|---|---|---|---|---|---|
+| `config/database.php` | `sqlite` (default) | `database/database.sqlite` | `wal` (default) | `5000` (default) | `normal` (default) |
+| `.env.example` | `sqlite` | commented (defaults to file) | `wal` | `5000` | `normal` |
+| `phpunit.xml` | `sqlite` | `:memory:` (override) | N/A in-memory | N/A in-memory | N/A in-memory |
+
+- **Production Security Requirements (Local `.env.example` vs Mandatory Production Values):**
+
+| Variable | Local `.env.example` | Mandatory Production Setting | Risk if Misconfigured |
+|---|---|---|---|
+| `APP_ENV` | `local` | `production` | Unsafe environment behaviors / lax guards |
+| `APP_DEBUG` | `true` | `false` | Leaks stack traces, env values, internals |
+| `APP_URL` | `http://localhost` | `https://your-domain.example` | Cleartext transport & broken TLS URLs |
+| `SESSION_SECURE_COOKIE` | `false` | `true` | Session cookie exposed over unencrypted HTTP |
+| `MAIL_MAILER` | `log` | `smtp` or transactional API driver | Alert emails silently logged, never delivered |
+
+### 7. Outstanding Phase 01 Acceptance Criteria
+- [ ] Remote GitHub Actions execution of `.github/workflows/ci.yml` verifying PHP `8.3`, PHP `8.4`, SQLite WAL, and MySQL `8.0` migrations on Linux runners.
+- [ ] Codex independent re-review of remediation branch `fix/phase-01-foundation-remediation`.
+- [ ] Owner authentication migration and `sitepulse:create-owner` CLI command (held per NO-GO until remediation review).
+- [ ] Maintainer `@ayjed` explicit review and approval of Phase 01.

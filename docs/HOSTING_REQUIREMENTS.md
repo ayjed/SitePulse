@@ -51,7 +51,7 @@ Shared hosting compatibility is an **engineering target** that requires empirica
   - `laravel/framework`: `^13.0` (verified at `v13.44.1`)
   - `pestphp/pest`: `^4.0` with `phpunit/phpunit: ^12.5` (verified at `v4.7.8` / `12.5.33`)
   - `livewire/livewire`: `^4.2` (verified at `v4.4.10`)
-  - **PHP 8.3+ Compatibility Guard:** `composer.json` excludes `symfony/* >= 8.0` (which require PHP `>= 8.4.0`), keeping `composer.lock` on Laravel 13's supported **Symfony 7.4 LTS** branch so PHP 8.3+ remains supported.
+  - **PHP 8.3+ Compatibility Guard:** `composer.json` excludes `symfony/* >= 8.0` via `"conflict"` declarations (since Symfony 8.0+ requires PHP `>= 8.4.0`), keeping `composer.lock` on Laravel 13's supported **Symfony 7.4 LTS** branch. Using `config.platform.php` instead of `"conflict"` was evaluated and rejected because `config.platform.php` masks real host PHP `< 8.3` checks during `composer install` (verified empirically on PHP `8.2.12`). Real PHP `8.3` and `8.4` execution is scheduled in GitHub Actions CI.
 - **Node.js & Frontend Assets:**
   - Building assets from source (`npm ci && npm run build`) requires **Node.js `^20.19.0 || >=22.12.0`** (CI targets Node `22` LTS; verified locally with Node `v26.13.0` and npm `11.20.0`).
   - Target hosts without Node.js/npm can deploy pre-built `public/build/` assets generated during CI/packaging.
@@ -83,10 +83,10 @@ Shared hosting compatibility is an **engineering target** that requires empirica
 
 ### 3.7 Email Delivery Requirements
 - Outbound transactional email via SMTP (port 587/465) or API drivers (Mailgun, Postmark, Resend, Amazon SES). PHP `mail()` is discouraged.
-- **Production Mail Config:** Local `.env.example` sets `MAIL_MAILER=log` to avoid accidental outbound messages during development; production deployments **must** configure `MAIL_MAILER=smtp` (or a supported API driver), valid TLS/authentication credentials, `MAIL_FROM_ADDRESS`, and an explicit bounded transport timeout (`<= 5s` per ADR-0004).
+- **Production Mail Config:** Local `.env.example` sets `MAIL_MAILER=log` to avoid accidental outbound messages during development; production deployments **must** configure `MAIL_MAILER=smtp` (or a supported API driver), valid TLS/authentication credentials, `MAIL_FROM_ADDRESS`, and keep SMTP timeout bounded (`config/mail.php` defaults `mailers.smtp.timeout` to `MAIL_TIMEOUT=5` seconds, adhering to the `<= 5s` limit in ADR-0004).
 
 ### 3.8 Production Environment Hardening & SQLite Overrides
-- **SQLite Defaults vs Environment Overrides:** `config/database.php` defaults the `sqlite` connection to `DB_JOURNAL_MODE=wal`, `DB_BUSY_TIMEOUT=5000`, `DB_SYNCHRONOUS=normal`, and `DEFERRED` transactions. `.env.example` mirrors these defaults explicitly, while `phpunit.xml` overrides `DB_DATABASE=:memory:` for isolated unit/feature testing (where SQLite WAL is inactive because `:memory:` databases do not persist WAL files).
+- **SQLite Defaults vs Environment Overrides:** `config/database.php` supplies the default SQLite settings (`journal_mode => env('DB_JOURNAL_MODE', 'wal')`, `busy_timeout => env('DB_BUSY_TIMEOUT', 5000)`, `synchronous => env('DB_SYNCHRONOUS', 'normal')`, and `transaction_mode => 'DEFERRED'`). `.env.example` sets only `DB_CONNECTION=sqlite` and leaves those tuning flags unset unless explicitly overridden in `.env`. `phpunit.xml` overrides `DB_DATABASE=:memory:` for isolated test execution (where SQLite WAL is inactive because `:memory:` databases do not persist WAL files).
 - **Mandatory Production Environment Variables:**
   - `APP_ENV=production` and `APP_DEBUG=false` (`.env.example` enables `APP_DEBUG=true` for local debugging only).
   - `APP_URL=https://...` served exclusively over HTTPS.

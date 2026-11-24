@@ -1,24 +1,68 @@
 # SitePulse
 
-> Planning-stage project: a lightweight, self-hosted website uptime monitoring tool for PHP developers and small website owners.
+> A lightweight, self-hosted website uptime and response-time monitoring application built on Laravel 13.
 
-**Status:** Phase 00 — Discovery and feasibility. No application implementation has been approved yet.
+**Status:** Phase 01 — Foundation and local development (`IN PROGRESS`; owner authentication CLI and Phases 02–05 are not yet implemented).
 
 ## Intended outcomes
-- Monitor website availability and HTTP response time.
-- Record uptime and downtime history.
-- Provide a usable, accessible status dashboard.
-- Check TLS certificate expiry and optionally alert by email.
-- Offer a clear installation path for compatible PHP hosting with cron support, **only after testing compatibility**.
+- Monitor website availability and HTTP response time with strict SSRF defenses.
+- Record uptime and downtime history (30-day default raw retention, permanent incident logs).
+- Provide a usable, accessible status dashboard (Blade + Livewire 4 + Tailwind CSS).
+- Check TLS certificate expiry and alert by email on state transitions.
+- Offer a documented, tested installation path for compatible PHP hosting with cron support.
 
-## Start here
-1. Read [PROJECT_RULES.md](PROJECT_RULES.md).
-2. Review [SITEPULSE_PHASE_TRACKER.md](SITEPULSE_PHASE_TRACKER.md).
-3. Complete [Phase 00](docs/phases/PHASE_00_DISCOVERY.md) and record decisions.
-4. Use [AGENTS.md](AGENTS.md) when working with Antigravity or Codex.
+## Approved technology stack
+- **PHP:** PHP 8.3+ (8.3 and 8.4 target runtimes; lockfile stays on Symfony 7.4 LTS for PHP 8.3+ compatibility)
+- **Framework:** Laravel 13 (`^13.0`)
+- **UI:** Server-rendered Blade + Tailwind CSS v4 (`@tailwindcss/vite`) + Livewire 4 (`^4.2`)
+- **Database:** SQLite default (WAL mode and 5000 ms busy timeout configured in `config/database.php`); MySQL 8.0+ / MariaDB 10.5+ compatibility target
+- **Testing & Linting:** Pest 4 (`^4.0`) with PHPUnit 12 (`^12.5`) and Laravel Pint
+- **Frontend Build Toolchain:** Vite 7 (`^7.0.7`, requires Node.js `^20.19.0 || >=22.12.0` and npm)
 
-## Proposed stack (not locked)
-PHP 8.3+, Laravel, Blade + Livewire + Tailwind, SQLite initially, MySQL compatibility, cron, Pest or PHPUnit. Architecture and hosting constraints must be validated in Phase 00.
+## Local development setup
 
-## Important
-Stars and sponsorships are not success criteria for early engineering milestones. The priority is safe, useful, installable software.
+### Prerequisites
+- PHP 8.3+ with required extensions: `bcmath`, `ctype`, `curl`, `dom`, `fileinfo`, `filter`, `mbstring`, `openssl`, `pdo_mysql`, `pdo_sqlite`, `session`, `tokenizer`, `xml`, `zip`
+- Composer 2.7+
+- Node.js `^20.19.0 || >=22.12.0` and npm
+
+> **Windows note:** Official `windows.php.net` PHP ZIP builds are unsigned. On Windows 11 systems enforcing Smart App Control (`VerifiedAndReputableDesktop`), loading unsigned extension DLLs (such as `php_openssl.dll` and `php_fileinfo.dll`) may be blocked in restricted or offline sandboxes. Do not disable Windows security protections; use WSL2 Ubuntu, a Linux Docker container, or a trusted code-signed runtime.
+
+### Repeatable installation & verification commands
+```bash
+git clone https://github.com/ayjed/SitePulse.git
+cd SitePulse
+composer run setup
+```
+
+`composer run setup` runs:
+1. `composer install --no-interaction`
+2. Idempotent environment initialization via `App\Support\EnvironmentSetup::prepare()` (copies `.env.example` to `.env` if missing, generates `APP_KEY` via `artisan key:generate --force` only when a valid key is absent, verifies Laravel's `encrypter` initializes cleanly, and creates `database/database.sqlite` when `DB_CONNECTION=sqlite`)
+3. `php artisan migrate --force`
+4. `npm ci`
+5. `npm run build`
+
+Start the local web server and run verification checks:
+```bash
+php artisan serve
+php artisan test
+php vendor/bin/pint --test
+composer audit
+```
+
+Database seeding (`php artisan db:seed`) intentionally creates **zero** default or predictable user accounts. Initial owner account provisioning will be introduced in the next Phase 01 milestone (`sitepulse:create-owner`).
+
+### Production configuration notes
+Before deploying to production, configure `.env` with:
+- `APP_ENV=production` and `APP_DEBUG=false`
+- `APP_URL=https://your-domain.example` over TLS/HTTPS
+- `SESSION_SECURE_COOKIE=true`
+- `MAIL_MAILER=smtp` (or a supported transactional API driver), valid credentials/TLS, `MAIL_FROM_ADDRESS`, and `MAIL_TIMEOUT=5` (`config/mail.php` defaults SMTP timeout to `5` seconds per ADR-0004)
+
+See [HOSTING_REQUIREMENTS.md](docs/HOSTING_REQUIREMENTS.md) and [SECURITY.md](docs/SECURITY.md) for full details.
+
+## Planning & governance documents
+1. [PROJECT_RULES.md](PROJECT_RULES.md)
+2. [SITEPULSE_PHASE_TRACKER.md](SITEPULSE_PHASE_TRACKER.md)
+3. [Phase 01 Foundation](docs/phases/PHASE_01_FOUNDATION.md)
+4. [AGENTS.md](AGENTS.md)

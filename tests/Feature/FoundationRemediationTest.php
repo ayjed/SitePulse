@@ -9,20 +9,45 @@ use Illuminate\Support\Facades\Hash;
 
 uses(RefreshDatabase::class);
 
-function writeArtisanKeyStub(string $directory): void
+function createDisposableLaravelWorkspace(string $workspacePath): void
 {
-    $artisanStub = <<<'PHP'
-<?php
-$logFile = __DIR__ . DIRECTORY_SEPARATOR . 'artisan_calls.log';
-file_put_contents($logFile, implode(' ', array_slice($argv, 1)) . PHP_EOL, FILE_APPEND);
-$envPath = __DIR__ . DIRECTORY_SEPARATOR . '.env';
-$contents = file_get_contents($envPath);
-$newKey = 'base64:' . base64_encode(random_bytes(32));
-$updated = preg_replace('/^APP_KEY=.*$/m', 'APP_KEY=' . $newKey, $contents);
-file_put_contents($envPath, $updated);
-PHP;
+    File::ensureDirectoryExists($workspacePath);
+    File::copy(base_path('composer.json'), $workspacePath.DIRECTORY_SEPARATOR.'composer.json');
+    File::copy(base_path('.env.example'), $workspacePath.DIRECTORY_SEPARATOR.'.env.example');
 
-    File::put($directory.DIRECTORY_SEPARATOR.'artisan', $artisanStub);
+    $autoloadLiteral = var_export(base_path('vendor/autoload.php'), true);
+    $artisanContents = str_replace(
+        "__DIR__.'/vendor/autoload.php'",
+        $autoloadLiteral,
+        File::get(base_path('artisan'))
+    );
+    File::put($workspacePath.DIRECTORY_SEPARATOR.'artisan', $artisanContents);
+
+    foreach (['bootstrap', 'config', 'routes'] as $directory) {
+        File::copyDirectory(base_path($directory), $workspacePath.DIRECTORY_SEPARATOR.$directory);
+    }
+
+    foreach ([
+        'storage/framework/cache/data',
+        'storage/framework/sessions',
+        'storage/framework/testing',
+        'storage/framework/views',
+        'storage/logs',
+    ] as $storageDir) {
+        File::ensureDirectoryExists($workspacePath.DIRECTORY_SEPARATOR.str_replace('/', DIRECTORY_SEPARATOR, $storageDir));
+    }
+}
+
+function runPrepareCapturingOutput(string $workspacePath): array
+{
+    ob_start();
+    try {
+        $exitCode = EnvironmentSetup::prepare($workspacePath);
+    } finally {
+        $stdout = (string) ob_get_clean();
+    }
+
+    return [$exitCode, $stdout];
 }
 
 test('database seeder does not create any default or predictable user accounts', function () {
@@ -44,91 +69,159 @@ test('user factory remains usable for automated tests without a predictable pass
     expect(Hash::check('custom-test-secret', $explicitUser->password))->toBeTrue();
 });
 
-test('environment setup generates APP_KEY once and preserves it across retries', function () {
-    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_setup_test_'.bin2hex(random_bytes(8));
-    File::ensureDirectoryExists($tempDir);
+test('environment setup generates a genuine usable APP_KEY once and preserves it across retries', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_real_setup_'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
 
     try {
-        File::put($tempDir.DIRECTORY_SEPARATOR.'.env.example', implode("\n", [
-            'APP_NAME=SitePulse',
-            'APP_ENV=local',
-            'APP_KEY=',
-            'DB_CONNECTION=sqlite',
-            '',
-        ]));
-        writeArtisanKeyStub($tempDir);
-
-        // First setup run creates .env, sets APP_KEY, and creates database/database.sqlite.
-        expect(EnvironmentSetup::prepare($tempDir))->toBe(0);
+        [$firstExit, $firstOutput] = runPrepareCapturingOutput($tempDir);
 
         $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
         $generatedKey = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
         $firstEnvSnapshot = File::get($envPath);
-        $callsAfterFirst = file($tempDir.DIRECTORY_SEPARATOR.'artisan_calls.log', FILE_IGNORE_NEW_LINES);
 
-        expect($generatedKey)->not->toBeNull()
+        expect($firstExit)->toBe(0)
+            ->and($generatedKey)->not->toBeNull()
             ->and($generatedKey)->toStartWith('base64:')
-            ->and(File::exists($tempDir.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'database.sqlite'))->toBeTrue()
-            ->and($callsAfterFirst)->toHaveCount(1)
-            ->and($callsAfterFirst[0])->toContain('key:generate --force');
+            ->and($firstOutput)->not->toContain($generatedKey)
+            ->and(EnvironmentSetup::isValidAppKey((string) $generatedKey))->toBeTrue()
+            ->and(EnvironmentSetup::verifyApplicationEncryption($tempDir))->toBe(0)
+            ->and(File::exists($tempDir.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'database.sqlite'))->toBeTrue();
 
-        // Retrying setup must preserve the exact .env and never re-invoke key:generate.
-        expect(EnvironmentSetup::prepare($tempDir))->toBe(0);
-        expect(EnvironmentSetup::prepare($tempDir))->toBe(0);
+        [$secondExit, $secondOutput] = runPrepareCapturingOutput($tempDir);
+        [$thirdExit, $thirdOutput] = runPrepareCapturingOutput($tempDir);
 
-        expect(File::get($envPath))->toBe($firstEnvSnapshot)
-            ->and(EnvironmentSetup::readEnvValue($envPath, 'APP_KEY'))->toBe($generatedKey)
-            ->and(file($tempDir.DIRECTORY_SEPARATOR.'artisan_calls.log', FILE_IGNORE_NEW_LINES))->toHaveCount(1);
+        expect($secondExit)->toBe(0)
+            ->and($thirdExit)->toBe(0)
+            ->and($secondOutput)->toContain('preserving current key')
+            ->and($thirdOutput)->toContain('preserving current key')
+            ->and($secondOutput)->not->toContain($generatedKey)
+            ->and($thirdOutput)->not->toContain($generatedKey)
+            ->and(File::get($envPath))->toBe($firstEnvSnapshot);
     } finally {
         File::deleteDirectory($tempDir);
     }
 });
 
-test('environment setup handles missing or empty quoted APP_KEY and skips sqlite file for mysql', function () {
-    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_setup_edge_'.bin2hex(random_bytes(8));
-    File::ensureDirectoryExists($tempDir);
+test('environment setup handles malformed empty APP_KEY variants with genuine Artisan key generation', function (string $envTemplate) {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_empty_variants_'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
 
     try {
-        File::put($tempDir.DIRECTORY_SEPARATOR.'.env', implode("\n", [
-            'APP_NAME=SitePulse',
-            'APP_KEY=""',
-            'DB_CONNECTION=mysql',
-            '',
-        ]));
-        writeArtisanKeyStub($tempDir);
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        File::put($envPath, $envTemplate);
 
-        expect(EnvironmentSetup::hasAppKey($tempDir.DIRECTORY_SEPARATOR.'.env'))->toBeFalse();
-        expect(EnvironmentSetup::prepare($tempDir))->toBe(0);
+        expect(EnvironmentSetup::hasAppKey($envPath))->toBeFalse();
 
-        $firstKey = EnvironmentSetup::readEnvValue($tempDir.DIRECTORY_SEPARATOR.'.env', 'APP_KEY');
-        expect($firstKey)->toStartWith('base64:')
-            ->and(File::exists($tempDir.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'database.sqlite'))->toBeFalse()
-            ->and(file($tempDir.DIRECTORY_SEPARATOR.'artisan_calls.log', FILE_IGNORE_NEW_LINES))->toHaveCount(1);
+        [$exitCode, $output] = runPrepareCapturingOutput($tempDir);
+        $generatedKey = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
+        $snapshotAfterFirst = File::get($envPath);
 
-        // Existing non-empty APP_KEY must be preserved on subsequent runs.
-        expect(EnvironmentSetup::prepare($tempDir))->toBe(0);
-        expect(EnvironmentSetup::readEnvValue($tempDir.DIRECTORY_SEPARATOR.'.env', 'APP_KEY'))->toBe($firstKey)
-            ->and(file($tempDir.DIRECTORY_SEPARATOR.'artisan_calls.log', FILE_IGNORE_NEW_LINES))->toHaveCount(1);
+        expect($exitCode)->toBe(0)
+            ->and($generatedKey)->not->toBeNull()
+            ->and($generatedKey)->toStartWith('base64:')
+            ->and($generatedKey)->not->toEndWith('"')
+            ->and($generatedKey)->not->toEndWith("'")
+            ->and($output)->not->toContain($generatedKey)
+            ->and(EnvironmentSetup::isValidAppKey((string) $generatedKey))->toBeTrue()
+            ->and(EnvironmentSetup::verifyApplicationEncryption($tempDir))->toBe(0);
 
-        // Missing APP_KEY line (with only a commented placeholder) must append and populate once.
-        File::put($tempDir.DIRECTORY_SEPARATOR.'.env', implode("\n", [
-            'APP_NAME=SitePulse',
-            '# APP_KEY=commented_only',
-            'DB_CONNECTION=mysql',
-            '',
-        ]));
-        expect(EnvironmentSetup::hasAppKey($tempDir.DIRECTORY_SEPARATOR.'.env'))->toBeFalse();
-        expect(EnvironmentSetup::prepare($tempDir))->toBe(0);
+        [$retryExit] = runPrepareCapturingOutput($tempDir);
 
-        $appendedKey = EnvironmentSetup::readEnvValue($tempDir.DIRECTORY_SEPARATOR.'.env', 'APP_KEY');
-        expect($appendedKey)->toStartWith('base64:')
-            ->and(file($tempDir.DIRECTORY_SEPARATOR.'artisan_calls.log', FILE_IGNORE_NEW_LINES))->toHaveCount(2);
+        expect($retryExit)->toBe(0)
+            ->and(File::get($envPath))->toBe($snapshotAfterFirst);
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+})->with([
+    'quoted empty double' => "APP_NAME=SitePulse\nAPP_KEY=\"\"\nDB_CONNECTION=mysql\n",
+    'quoted empty single' => "APP_NAME=SitePulse\nAPP_KEY=''\nDB_CONNECTION=mysql\n",
+    'exported empty' => "APP_NAME=SitePulse\nexport APP_KEY=\nDB_CONNECTION=mysql\n",
+    'spaced equals empty' => "APP_NAME=SitePulse\nAPP_KEY =\nDB_CONNECTION=mysql\n",
+    'commented only' => "APP_NAME=SitePulse\n# APP_KEY=commented\nDB_CONNECTION=mysql\n",
+    'missing key line' => "APP_NAME=SitePulse\nDB_CONNECTION=mysql\n",
+]);
+
+test('environment setup returns nonzero exit code for invalid keys or malformed dotenv files', function (string $malformedEnv) {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_invalid_env_'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        File::put($envPath, $malformedEnv);
+
+        [$exitCode, $output] = runPrepareCapturingOutput($tempDir);
+
+        expect($exitCode)->not->toBe(0)
+            ->and($output)->not->toContain('short-invalid-key')
+            ->and(File::get($envPath))->toBe($malformedEnv);
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+})->with([
+    'unclosed quote syntax' => "APP_NAME=SitePulse\nAPP_KEY=\"unterminated\n",
+    'short non-empty key' => "APP_NAME=SitePulse\nAPP_KEY=short-invalid-key\nDB_CONNECTION=mysql\n",
+    'corrupted base64 key' => "APP_NAME=SitePulse\nAPP_KEY=base64:!!!invalid!!!\nDB_CONNECTION=mysql\n",
+    'wrong byte length base64' => "APP_NAME=SitePulse\nAPP_KEY=base64:".base64_encode('too-short')."\nDB_CONNECTION=mysql\n",
+]);
+
+test('environment setup succeeds in project paths containing spaces, exclamation marks, and normal names', function (string $dirSuffix) {
+    $rootTemp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_path_suite_'.bin2hex(random_bytes(8));
+    $workspacePath = $rootTemp.DIRECTORY_SEPARATOR.$dirSuffix;
+    createDisposableLaravelWorkspace($workspacePath);
+
+    try {
+        [$exitCode] = runPrepareCapturingOutput($workspacePath);
+        $envPath = $workspacePath.DIRECTORY_SEPARATOR.'.env';
+        $key = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
+
+        expect($exitCode)->toBe(0)
+            ->and($key)->toStartWith('base64:')
+            ->and(EnvironmentSetup::verifyApplicationEncryption($workspacePath))->toBe(0);
+
+        [$retryExit] = runPrepareCapturingOutput($workspacePath);
+        expect($retryExit)->toBe(0)
+            ->and(EnvironmentSetup::readEnvValue($envPath, 'APP_KEY'))->toBe($key);
+    } finally {
+        File::deleteDirectory($rootTemp);
+    }
+})->with([
+    'ordinary directory' => 'SitePulseApp',
+    'directory with spaces' => 'SitePulse Project Dir',
+    'directory with exclamation mark' => 'SitePulse!App!Check',
+    'directory with spaces and exclamation' => 'SitePulse ! Path Check',
+]);
+
+test('environment setup fails nonzero when sqlite directory or file creation fails', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_sqlite_fail_'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        // Place a regular file where the database directory would need to be created.
+        File::put($tempDir.DIRECTORY_SEPARATOR.'database', 'blocking-file');
+        [$blockedDirExit] = runPrepareCapturingOutput($tempDir);
+        expect($blockedDirExit)->not->toBe(0);
+
+        // Replace blocker file with an actual directory, then point DB_DATABASE to an existing subdirectory.
+        File::delete($tempDir.DIRECTORY_SEPARATOR.'database');
+        File::ensureDirectoryExists($tempDir.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'dir_as_db');
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        File::put($envPath, File::get($envPath)."\nDB_DATABASE=database/dir_as_db\n");
+
+        expect(fn () => EnvironmentSetup::ensureSqliteDatabase(
+            $envPath,
+            $tempDir.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'database.sqlite',
+            $tempDir
+        ))->toThrow(RuntimeException::class);
+
+        [$dirDbExit] = runPrepareCapturingOutput($tempDir);
+        expect($dirDbExit)->not->toBe(0);
     } finally {
         File::deleteDirectory($tempDir);
     }
 });
 
-test('composer setup scripts guard APP_KEY regeneration and prefer npm ci', function () {
+test('composer setup scripts guard APP_KEY regeneration, keep real PHP checks, and prefer npm ci', function () {
     $composer = json_decode(File::get(base_path('composer.json')), true, 512, JSON_THROW_ON_ERROR);
 
     $setupScript = implode("\n", $composer['scripts']['setup'] ?? []);
@@ -139,13 +232,15 @@ test('composer setup scripts guard APP_KEY regeneration and prefer npm ci', func
         ->and($setupScript)->not->toContain('npm install')
         ->and($setupScript)->not->toContain('artisan key:generate')
         ->and($postCreateScript)->toContain('EnvironmentSetup::prepare')
-        ->and($postCreateScript)->not->toContain('artisan key:generate');
+        ->and($postCreateScript)->not->toContain('artisan key:generate')
+        ->and($composer['config']['platform']['php'] ?? null)->toBeNull();
 });
 
-test('sqlite connection defaults enforce WAL mode and 5000ms busy timeout on file databases', function () {
+test('sqlite defaults enforce WAL and 5000ms busy timeout and smtp timeout defaults to 5 seconds', function () {
     expect(config('database.connections.sqlite.journal_mode'))->toBe('wal')
         ->and((int) config('database.connections.sqlite.busy_timeout'))->toBe(5000)
-        ->and(config('database.connections.sqlite.synchronous'))->toBe('normal');
+        ->and(config('database.connections.sqlite.synchronous'))->toBe('normal')
+        ->and(config('mail.mailers.smtp.timeout'))->toBe(5);
 
     $tempDb = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse_wal_test_'.bin2hex(random_bytes(8)).'.sqlite';
     touch($tempDb);

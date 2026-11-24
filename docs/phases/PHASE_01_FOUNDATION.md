@@ -16,7 +16,7 @@
 - [x] Remediate PHP 8.3+ lockfile compatibility, unsafe seeding, repeatable setup (`APP_KEY` preservation), and `package-lock.json` (`npm ci` + build).
 - [x] Set up automated formatting checks (`pint`) and GitHub Actions CI workflow (`.github/workflows/ci.yml`; remote run pending push).
 - [ ] Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`, deferred until Codex remediation review).
-- [ ] Document installation and startup commands.
+- [x] Document installation and startup commands (`README.md`, `docs/HOSTING_REQUIREMENTS.md`).
 
 ## Exit criteria
 - [x] Clean install works with documented tool versions locally (PHP 8.4.28 host / WSL or Linux CI needed on Windows Smart App Control sandboxes).
@@ -62,8 +62,8 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - [x] Install Composer 2.7+ (Composer 2.11.2 verified).
 - [x] Execute non-destructive scaffolding.
 - [x] Resolve Pest 4, PHPUnit 12, and Livewire 4 via Composer.
-- [x] Execute `php artisan test` (expanded to 8 passing tests / 40 assertions).
-- [x] Remediate Codex NO-GO findings (Tasks 1–7 on branch `fix/phase-01-foundation-remediation`).
+- [x] Execute `php artisan test` (expanded to 22 passing tests / 134 assertions).
+- [x] Remediate Codex NO-GO and PASS-WITH-FINDINGS issues on branch `fix/phase-01-foundation-remediation`.
 - [ ] Run remote GitHub Actions CI workflow (PHP 8.3/8.4 + SQLite + MySQL 8.0) and verify green check.
 - [ ] Implement owner auth migration and `sitepulse:create-owner` command (blocked until remediation review).
 
@@ -82,7 +82,7 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - Non-destructive scaffold prepared and merged into repository root.
 - Preserved existing documentation: `README.md`, `PROJECT_RULES.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SITEPULSE_PHASE_TRACKER.md`, `docs/`, `.github/`.
 - Updated `.gitignore` to preserve existing rules while adding standard Laravel ignore paths (`vendor/`, `.env`, `database/database.sqlite`, etc.).
-- Created `.env.example` and local `.env` with SQLite defaults, `DB_BUSY_TIMEOUT=5000`, `DB_JOURNAL_MODE=wal`, `DB_SYNCHRONOUS=normal`.
+- Created `.env.example` (`DB_CONNECTION=sqlite`) and local `.env`, while `config/database.php` supplies SQLite defaults (`DB_JOURNAL_MODE=wal`, `DB_BUSY_TIMEOUT=5000`, `DB_SYNCHRONOUS=normal`).
 
 ### 3. Composer Resolution & Package Lock
 - Executed `composer install --no-interaction`.
@@ -176,7 +176,7 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 | Layer | `DB_CONNECTION` | `DB_DATABASE` | `DB_JOURNAL_MODE` | `DB_BUSY_TIMEOUT` | `DB_SYNCHRONOUS` |
 |---|---|---|---|---|---|
 | `config/database.php` | `sqlite` (default) | `database/database.sqlite` | `wal` (default) | `5000` (default) | `normal` (default) |
-| `.env.example` | `sqlite` | commented (defaults to file) | `wal` | `5000` | `normal` |
+| `.env.example` | `sqlite` | commented (inherits `config/database.php`) | not set (inherits `wal`) | not set (inherits `5000`) | not set (inherits `normal`) |
 | `phpunit.xml` | `sqlite` | `:memory:` (override) | N/A in-memory | N/A in-memory | N/A in-memory |
 
 - **Production Security Requirements (Local `.env.example` vs Mandatory Production Values):**
@@ -188,9 +188,35 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 | `APP_URL` | `http://localhost` | `https://your-domain.example` | Cleartext transport & broken TLS URLs |
 | `SESSION_SECURE_COOKIE` | `false` | `true` | Session cookie exposed over unencrypted HTTP |
 | `MAIL_MAILER` | `log` | `smtp` or transactional API driver | Alert emails silently logged, never delivered |
+| `MAIL_TIMEOUT` | `5` (`config/mail.php` default `5`) | `<= 5` seconds (per ADR-0004) | Slow SMTP socket stalls cron/check loop |
 
 ### 7. Outstanding Phase 01 Acceptance Criteria
 - [ ] Remote GitHub Actions execution of `.github/workflows/ci.yml` verifying PHP `8.3`, PHP `8.4`, SQLite WAL, and MySQL `8.0` migrations on Linux runners.
 - [ ] Codex independent re-review of remediation branch `fix/phase-01-foundation-remediation`.
-- [ ] Owner authentication migration and `sitepulse:create-owner` CLI command (held per NO-GO until remediation review).
+- [ ] Owner authentication migration and `sitepulse:create-owner` CLI command (held until remediation review).
 - [ ] Maintainer `@ayjed` explicit review and approval of Phase 01.
+
+---
+
+## Task 04 — Targeted Remediation Corrections Log (2026-11-24)
+
+Triggered by Codex `PASS WITH FINDINGS` audit on `adda0bb`:
+
+1. **`APP_KEY` Parsing, Generation & Verification (`app/Support/EnvironmentSetup.php`):**
+   - Replaced custom regex parsing with `Dotenv\Dotenv::parse()`.
+   - Normalized malformed empty placeholders (`APP_KEY=""`, `APP_KEY=''`, `export APP_KEY=`, `APP_KEY =`, commented/missing line) to `APP_KEY=` before running `artisan key:generate --force`.
+   - Added `Encrypter`-based key validation and fresh-subprocess `verifyApplicationEncryption()` initializing Laravel's real `encrypter` service and verifying an encrypt/decrypt round-trip without logging keys.
+   - Invalid existing non-empty keys or malformed `.env` syntax fail with nonzero exit codes and leave `.env` untouched.
+   - Replaced stubbed tests with genuine disposable Laravel workspace integration tests calling real `artisan key:generate` and `EncryptionServiceProvider`.
+2. **Shell-Free Windows Subprocess Handling (`app/Support/EnvironmentSetup.php`):**
+   - Replaced shell-escaped `proc_open()` strings with argument arrays (`[PHP_BINARY, $artisanPath, ...]`), preventing `cmd.exe` `!` and space parsing failures. Tested across paths containing spaces, `!`, and ordinary Windows directory names.
+3. **SQLite Creation Failure Propagation (`app/Support/EnvironmentSetup.php`):**
+   - Checked `mkdir()` and `touch()` results plus non-directory/directory/writability collisions, throwing `RuntimeException` and returning nonzero exit codes from `EnvironmentSetup::prepare()`.
+4. **SQLite Documentation & Mail Timeout Alignment:**
+   - Removed inaccurate statements claiming `.env.example` contains `DB_JOURNAL_MODE`, `DB_BUSY_TIMEOUT`, and `DB_SYNCHRONOUS` (defaults live in `config/database.php`).
+   - Wired `config/mail.php` SMTP `timeout` to `max(1, (int) (env('MAIL_TIMEOUT') ?: 5))` and documented `MAIL_TIMEOUT=5` alongside setup instructions in `README.md` and `docs/HOSTING_REQUIREMENTS.md`.
+5. **Composer `config.platform.php` vs `"conflict"` Evaluation:**
+   - Empirically tested `config.platform.php: "8.3.0"` on PHP `8.2.12`: `composer install --dry-run` succeeded (`RC=0`), bypassing the `php: ^8.3` platform gate. With `"conflict"` on `symfony/* >= 8.0`, PHP `8.2.12` failed cleanly (`RC=2`) while PHP `8.3+` locks cleanly to Symfony 7.4 LTS (`0` excluded packages). Retained `"conflict"` declarations and kept PHP `8.3` / `8.4` in CI.
+6. **CI Hardening (`.github/workflows/ci.yml`):**
+   - Pinned all actions (`actions/checkout`, `shivammathur/setup-php`, `actions/cache`, `actions/setup-node`) to immutable 40-character commit SHAs.
+   - Disabled git token persistence (`persist-credentials: false`), avoided persisting DB passwords in `.env`, and verified idempotent `APP_KEY` preservation via SHA-256 hash comparison inside PHP.

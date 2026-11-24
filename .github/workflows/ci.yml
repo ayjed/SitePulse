@@ -145,7 +145,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      CI_MYSQL_PASSWORD: ${{ format('sp-ci-{0}-{1}', github.run_id, github.run_attempt) }}
+      CI_MYSQL_PASSWORD: ${{ secrets.CI_MYSQL_PASSWORD || format('sp-ci-{0}-{1}', github.run_id, github.run_attempt) }}
 
     services:
       mysql:
@@ -158,7 +158,7 @@ jobs:
         ports:
           - 127.0.0.1:33306:3306
         options: >-
-          --health-cmd='mysqladmin ping -h 127.0.0.1 -u "$MYSQL_USER" -p"$MYSQL_PASSWORD"'
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=6
@@ -216,6 +216,29 @@ jobs:
             file_put_contents(".env", $env);
           '
           php -r 'require "vendor/autoload.php"; exit(\App\Support\EnvironmentSetup::prepare(getcwd() ?: "."));'
+
+      - name: Wait for MySQL 8.0 service user readiness
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '33306'
+          DB_DATABASE: sitepulse_test
+          DB_USERNAME: sitepulse_ci
+          DB_PASSWORD: ${{ env.CI_MYSQL_PASSWORD }}
+        run: |
+          php -r '
+            $dsn = sprintf("mysql:host=%s;port=%s;dbname=%s", getenv("DB_HOST"), getenv("DB_PORT"), getenv("DB_DATABASE"));
+            for ($attempt = 1; $attempt <= 30; $attempt++) {
+                try {
+                    new PDO($dsn, (string) getenv("DB_USERNAME"), (string) getenv("DB_PASSWORD"), [PDO::ATTR_TIMEOUT => 2]);
+                    echo "MySQL ready on attempt {$attempt}." . PHP_EOL;
+                    exit(0);
+                } catch (Throwable) {
+                    sleep(1);
+                }
+            }
+            fwrite(STDERR, "Timed out waiting for MySQL readiness." . PHP_EOL);
+            exit(1);
+          '
 
       - name: Run MySQL migrations and verify safe seeding
         env:

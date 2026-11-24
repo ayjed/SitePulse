@@ -45,12 +45,20 @@ Shared hosting compatibility is an **engineering target** that requires empirica
   - `ext-filter`: Required for IP address validation, CIDR parsing, and sanitization.
   - `ext-ctype`, `ext-tokenizer`, `ext-session`: Standard PHP runtime requirements.
 
-### 3.2 Composer & Package Dependencies
+### 3.2 Composer, Frontend Build & Package Dependencies
 - **Composer Version:** Composer 2.7+ on the host (or deployment via pre-packaged release zip with pre-built `vendor/` directory).
 - **Dependency Baseline:**
-  - `laravel/framework`: `^13.0`
-  - `pestphp/pest`: `^4.0` (with `phpunit/phpunit: ^12.0`, actual package resolution verified in Phase 01)
-  - `livewire/livewire`: `^4.2` (subject to Composer resolution; Blade + Tailwind polling as zero-dependency fallback)
+  - `laravel/framework`: `^13.0` (verified at `v13.44.1`)
+  - `pestphp/pest`: `^4.0` with `phpunit/phpunit: ^12.5` (verified at `v4.7.8` / `12.5.33`)
+  - `livewire/livewire`: `^4.2` (verified at `v4.4.10`)
+  - **PHP 8.3+ Compatibility Guard:** `composer.json` excludes `symfony/* >= 8.0` (which require PHP `>= 8.4.0`), keeping `composer.lock` on Laravel 13's supported **Symfony 7.4 LTS** branch so PHP 8.3+ remains supported.
+- **Node.js & Frontend Assets:**
+  - Building assets from source (`npm ci && npm run build`) requires **Node.js `^20.19.0 || >=22.12.0`** (CI targets Node `22` LTS; verified locally with Node `v26.13.0` and npm `11.20.0`).
+  - Target hosts without Node.js/npm can deploy pre-built `public/build/` assets generated during CI/packaging.
+
+### 3.3 Development Workstation Caveat (Windows Smart App Control)
+- Official `windows.php.net` PHP ZIP distributions are unsigned (`Authenticode Status: NotSigned`). On Windows 11 machines enforcing **Smart App Control** (`VerifiedAndReputableDesktop`), loading unsigned extension DLLs (such as `php_openssl.dll` and `php_fileinfo.dll`) can be blocked (`0xc0e90002`) in restricted or offline sandboxes where cloud reputation is unavailable.
+- Do **not** disable Windows Smart App Control to work around this. Use **WSL2 Ubuntu**, **Docker Linux containers** (`php:8.3-cli` / `php:8.4-cli`), code-signed runtimes, or **GitHub Actions `ubuntu-latest`** CI runners.
 
 ### 3.3 Command Line Interface (CLI) Access
 - **Terminal Access:** SSH shell access (or cPanel Terminal) is required for initial setup:
@@ -75,6 +83,14 @@ Shared hosting compatibility is an **engineering target** that requires empirica
 
 ### 3.7 Email Delivery Requirements
 - Outbound transactional email via SMTP (port 587/465) or API drivers (Mailgun, Postmark, Resend, Amazon SES). PHP `mail()` is discouraged.
+- **Production Mail Config:** Local `.env.example` sets `MAIL_MAILER=log` to avoid accidental outbound messages during development; production deployments **must** configure `MAIL_MAILER=smtp` (or a supported API driver), valid TLS/authentication credentials, `MAIL_FROM_ADDRESS`, and an explicit bounded transport timeout (`<= 5s` per ADR-0004).
+
+### 3.8 Production Environment Hardening & SQLite Overrides
+- **SQLite Defaults vs Environment Overrides:** `config/database.php` defaults the `sqlite` connection to `DB_JOURNAL_MODE=wal`, `DB_BUSY_TIMEOUT=5000`, `DB_SYNCHRONOUS=normal`, and `DEFERRED` transactions. `.env.example` mirrors these defaults explicitly, while `phpunit.xml` overrides `DB_DATABASE=:memory:` for isolated unit/feature testing (where SQLite WAL is inactive because `:memory:` databases do not persist WAL files).
+- **Mandatory Production Environment Variables:**
+  - `APP_ENV=production` and `APP_DEBUG=false` (`.env.example` enables `APP_DEBUG=true` for local debugging only).
+  - `APP_URL=https://...` served exclusively over HTTPS.
+  - `SESSION_SECURE_COOKIE=true` (`config/session.php` defaults `secure` to `null` / `.env.example` uses `false` for local HTTP `localhost`, which is unsafe over public networks).
 
 ---
 

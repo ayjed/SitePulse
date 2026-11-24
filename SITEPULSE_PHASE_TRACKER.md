@@ -29,14 +29,18 @@
 ## Current next actions
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
-- [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, required extensions enabled).
+- [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, Node `v26.13.0`, npm `11.20.0`).
 - [x] Non-destructive scaffolding executed safely into Git repository.
-- [x] Composer dependency resolution confirmed (Laravel 13.43.0, Pest 4.7.8, PHPUnit 12.5.33, Livewire 4.4.9).
-- [x] Local `.env.example`, `.env`, and SQLite WAL mode (busy_timeout 5000ms) verified.
-- [x] Framework boot verified and baseline automated tests executed passing (Pest 4 / PHPUnit 12).
-- [ ] Phase 01: Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`).
-- [ ] Phase 01: Configure CI pipeline (GitHub Actions) for linting, testing, and security checks.
-- [ ] Phase 01: Prepare Phase 01 completion report and request maintainer review.
+- [x] Phase 01 remediation Task 1: Diagnosed Windows Smart App Control (`VerifiedAndReputableDesktop`) blocking unsigned `php_openssl.dll` / `php_fileinfo.dll` in sandboxed/uncached execution; documented trusted runtime recommendations without disabling Windows security.
+- [x] Phase 01 remediation Task 2: Resolved `composer.lock` back to PHP 8.3+ compatibility via Symfony 7.4 LTS (`composer.json` conflict against `symfony/* >= 8.0`); zero packages exclude PHP 8.3; `composer audit` clean.
+- [x] Phase 01 remediation Task 3: Removed predictable `'Test User'` (`test@example.com`) seeding from `DatabaseSeeder` and hardcoded `'password'` from `UserFactory` while preserving factory test support.
+- [x] Phase 01 remediation Task 4: Added `App\Support\EnvironmentSetup` and guarded `composer.json` setup scripts so existing `APP_KEY` is preserved across retries.
+- [x] Phase 01 remediation Task 5: Generated and committed `package-lock.json`, switched `composer setup` to `npm ci`, and verified `npm run build` (`vite v7.3.8`).
+- [x] Phase 01 remediation Task 6: Authored `.github/workflows/ci.yml` covering PHP `8.3` & `8.4`, extensions, `composer audit`, `npm ci` + `npm run build`, SQLite WAL migrations, Pint, Pest tests, and MySQL `8.0` compatibility.
+- [ ] Codex independent re-review of `fix/phase-01-foundation-remediation` changes.
+- [ ] Maintainer review, push, and remote GitHub Actions CI run verification (PHP 8.3, PHP 8.4, MySQL 8.0).
+- [ ] Phase 01: Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`) after remediation sign-off.
+- [ ] Phase 01: Finalize Phase 01 completion evidence and request maintainer approval.
 
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
@@ -65,6 +69,7 @@
 | 2026-11-23 | 00 | Phase 00 architectural direction officially APPROVED by maintainer (@ayjed) | ADR-0001 to ADR-0004 ACCEPTED | APPROVED |
 | 2026-11-23 | 01 | Task 01: Git verified, environment audited, scaffold planned; BLOCKED by PHP 8.2 & missing Composer | docs/phases/PHASE_01_FOUNDATION.md | BLOCKED |
 | 2026-11-24 | 01 | Task 02: Environment resolved (PHP 8.4, Composer 2.11), Laravel 13 scaffolded, dependencies locked (Pest 4, PHPUnit 12, Livewire 4), SQLite WAL configured, baseline tests passing | `composer.lock`, `php artisan about`, `php artisan test` (2 passing) | In Progress |
+| 2026-11-24 | 01 | Task 03 (Remediation on `fix/phase-01-foundation-remediation`): Diagnosed Smart App Control DLL block; restored PHP 8.3+ lockfile compatibility via Symfony 7.4 LTS; removed default account seeding & predictable factory password; made setup repeatable (`EnvironmentSetup`); added `package-lock.json` (`npm ci` + build); authored `.github/workflows/ci.yml` | `php vendor/bin/pest` (8 passing, 40 assertions), `php vendor/bin/pint --test`, `composer audit`, `npm run build` | In Progress |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

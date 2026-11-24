@@ -77,8 +77,9 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |
 |---|---|---|---|---|
-| TBD | TBD | `pest --testsuite=Unit` | NOT RUN | Phase 00 planning stage |
-| TBD | TBD | `pest --testsuite=Security` | NOT RUN | Phase 00 planning stage |
-| TBD | TBD | `pest --testsuite=Integration` | NOT RUN | Phase 00 planning stage |
+| 2026-11-24 | `fix/phase-01-foundation-remediation` (uncommitted pre-commit check on PHP 8.4.28 / Windows host) | `php vendor/bin/pest` | PASS (8 passed, 40 assertions) | Foundation baseline & remediation tests on PHP 8.4.28 + SQLite (`:memory:` + temp file WAL probe); blocked earlier in Codex Windows Smart App Control sandbox |
+| 2026-11-24 | `fix/phase-01-foundation-remediation` | `php vendor/bin/pint --test` | PASS (29 files) | Code style clean across all PHP files |
+| Pending | GitHub Actions CI (`ubuntu-latest`) | `.github/workflows/ci.yml` (`PHP 8.3`, `PHP 8.4`, `MySQL 8.0`) | NOT RUN | Workflow authored; requires push/PR trigger on GitHub for remote PHP 8.3 & MySQL 8.0 verification |
+| TBD | TBD | `pest --testsuite=Security` | NOT RUN | Phase 02 target scope |
 
 > **Rule:** Never mark a test passed without having executed the command and verified the output.

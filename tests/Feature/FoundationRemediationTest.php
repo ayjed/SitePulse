@@ -197,16 +197,19 @@ test('environment setup fails nonzero when sqlite directory or file creation fai
     createDisposableLaravelWorkspace($tempDir);
 
     try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+
         // Place a regular file where the database directory would need to be created.
         File::put($tempDir.DIRECTORY_SEPARATOR.'database', 'blocking-file');
         [$blockedDirExit] = runPrepareCapturingOutput($tempDir);
-        expect($blockedDirExit)->not->toBe(0);
+        expect($blockedDirExit)->not->toBe(0)
+            ->and(is_file($envPath))->toBeFalse();
 
-        // Replace blocker file with an actual directory, then point DB_DATABASE to an existing subdirectory.
+        // Replace blocker file with an actual directory, seed .env, then point DB_DATABASE to an existing subdirectory.
         File::delete($tempDir.DIRECTORY_SEPARATOR.'database');
         File::ensureDirectoryExists($tempDir.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'dir_as_db');
-        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
-        File::put($envPath, File::get($envPath)."\nDB_DATABASE=database/dir_as_db\n");
+        $seededEnv = File::get($tempDir.DIRECTORY_SEPARATOR.'.env.example')."\nDB_DATABASE=database/dir_as_db\n";
+        File::put($envPath, $seededEnv);
 
         expect(fn () => EnvironmentSetup::ensureSqliteDatabase(
             $envPath,
@@ -215,7 +218,8 @@ test('environment setup fails nonzero when sqlite directory or file creation fai
         ))->toThrow(RuntimeException::class);
 
         [$dirDbExit] = runPrepareCapturingOutput($tempDir);
-        expect($dirDbExit)->not->toBe(0);
+        expect($dirDbExit)->not->toBe(0)
+            ->and(File::get($envPath))->toBe($seededEnv);
     } finally {
         File::deleteDirectory($tempDir);
     }
@@ -457,7 +461,7 @@ test('prepare leaves empty APP_KEY env and cached config byte-for-byte unchanged
             ->and(glob($tempDir.DIRECTORY_SEPARATOR.'.env.tmp.*'))->toBe([])
             ->and(glob($tempDir.DIRECTORY_SEPARATOR.'.en*.tmp'))->toBe([]);
     } finally {
-        \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+        File::deleteDirectory($tempDir);
     }
 });
 
@@ -503,7 +507,7 @@ test('prepare succeeds idempotently when APP_KEY is valid and bootstrap/cache/co
             ->and(file_get_contents($envPath))->toBe($originalEnv)
             ->and(file_get_contents($cachedConfigPath))->toBe($originalCachedConfig);
     } finally {
-        \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+        File::deleteDirectory($tempDir);
     }
 });
 
@@ -535,7 +539,7 @@ test('createExclusiveTempEnvFile creates .env.tmp.<hex> files ignored by .gitign
         [$initExit, $initOut, $initErr] = $runGit($gitDir, ['init', '-q']);
         expect($initExit)->toBe(0, $initOut.$initErr);
 
-        $created = \App\Support\EnvironmentSetup::createExclusiveTempEnvFile($gitDir);
+        $created = EnvironmentSetup::createExclusiveTempEnvFile($gitDir);
         expect($created)->toBeArray()->toHaveCount(2);
 
         [$tempPath, $handle] = $created;
@@ -567,7 +571,7 @@ test('createExclusiveTempEnvFile creates .env.tmp.<hex> files ignored by .gitign
         if ($tempPath !== '' && is_file($tempPath)) {
             @unlink($tempPath);
         }
-        \Illuminate\Support\Facades\File::deleteDirectory($gitDir);
+        File::deleteDirectory($gitDir);
     }
 });
 

@@ -4,7 +4,6 @@ namespace App\Support;
 
 use Dotenv\Dotenv;
 use Dotenv\Parser\EntryParser;
-use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Encryption\Encrypter;
 use RuntimeException;
 use Throwable;

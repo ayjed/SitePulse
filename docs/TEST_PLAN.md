@@ -77,7 +77,7 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |
 |---|---|---|---|---|
-| 2026-11-24 | `fix/phase-01-foundation-remediation` (PHP 8.4.28 / Windows host) | `php vendor/bin/pest` / `php artisan test` | PASS (22 passed, 134 assertions) | Foundation baseline & genuine Artisan/Encrypter remediation tests on PHP 8.4.28 + SQLite (`:memory:` + temp file WAL probe) |
+| 2026-11-24 | `fix/phase-01-foundation-remediation` (PHP 8.4.28 / Windows host) | `php vendor/bin/pest` / `php artisan test` | PASS (29 passed, 190 assertions) | Baseline, genuine Artisan/Encrypter tests, multiline `.env` preservation, atomic write & secret-canary non-leakage on PHP 8.4.28 + SQLite |
 | 2026-11-24 | `fix/phase-01-foundation-remediation` | `php vendor/bin/pint --test` | PASS (29 files) | Code style clean across all PHP files |
 | Pending | GitHub Actions CI (`ubuntu-latest`) | `.github/workflows/ci.yml` (`PHP 8.3`, `PHP 8.4`, `MySQL 8.0`) | NOT RUN | Hardened workflow authored with SHA-pinned actions; requires push/PR trigger on GitHub for remote PHP 8.3 & MySQL 8.0 verification |
 | TBD | TBD | `pest --testsuite=Security` | NOT RUN | Phase 02 target scope |

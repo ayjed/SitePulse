@@ -62,7 +62,7 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - [x] Install Composer 2.7+ (Composer 2.11.2 verified).
 - [x] Execute non-destructive scaffolding.
 - [x] Resolve Pest 4, PHPUnit 12, and Livewire 4 via Composer.
-- [x] Execute `php artisan test` (expanded to 22 passing tests / 134 assertions).
+- [x] Execute `php artisan test` (expanded to 29 passing tests / 190 assertions).
 - [x] Remediate Codex NO-GO and PASS-WITH-FINDINGS issues on branch `fix/phase-01-foundation-remediation`.
 - [ ] Run remote GitHub Actions CI workflow (PHP 8.3/8.4 + SQLite + MySQL 8.0) and verify green check.
 - [ ] Implement owner auth migration and `sitepulse:create-owner` command (blocked until remediation review).
@@ -220,3 +220,19 @@ Triggered by Codex `PASS WITH FINDINGS` audit on `adda0bb`:
 6. **CI Hardening (`.github/workflows/ci.yml`):**
    - Pinned all actions (`actions/checkout`, `shivammathur/setup-php`, `actions/cache`, `actions/setup-node`) to immutable 40-character commit SHAs.
    - Disabled git token persistence (`persist-credentials: false`), avoided persisting DB passwords in `.env`, and verified idempotent `APP_KEY` preservation via SHA-256 hash comparison inside PHP.
+
+---
+
+## Task 05 — Final Security Corrections & Remote CI Preparation Log (2026-11-24)
+
+Triggered by Codex `PASS WITH FINDINGS` audit on `e0aa9f1`:
+
+1. **Dotenv-Aware Top-Level Editing & Atomic `.env` Writes (`app/Support/EnvironmentSetup.php`):**
+   - Replaced flat regex line matching with Dotenv-aware chunk grouping mirroring `Dotenv\Parser\Lines` + `Dotenv\Parser\EntryParser`. Lines such as `APP_KEY=part-of-note` inside double-quoted multiline variables are never matched or altered; only top-level `APP_KEY` assignments (or appended EOF entries) are updated.
+   - Added `verifyProposedEnvPreservesUnrelatedVariables()` pre-write invariant checking `Dotenv::parse($proposed)` preserves every unrelated variable identically.
+   - Replaced in-place writes with `writeFileAtomically()` (same-directory `tempnam` + `fflush`/`fclose` + permissions preservation + `rename()`, cleaning temp artifacts on failure so failed runs leave `.env` byte-for-byte unchanged).
+2. **Error Secret-Leak Prevention (`app/Support/EnvironmentSetup.php`):**
+   - Removed raw Dotenv exception message forwarding (`$e->getMessage()`) and suppressed raw subprocess stderr/stdout leakage during `EnvironmentSetup::prepare()`, emitting safe static diagnostics instead.
+   - Added synthetic secret-canary tests verifying zero leakage across `stdout`, `stderr`, and `storage/logs/*.log` for malformed `MAIL_PASSWORD`, unterminated multiline values, invalid `APP_KEY`, missing `artisan`, and read-only `.env`.
+3. **Hardened MySQL GitHub Actions CI (`.github/workflows/ci.yml`):**
+   - Replaced passwordless `root` with `MYSQL_RANDOM_ROOT_PASSWORD: 'yes'` and a dedicated disposable non-root account (`MYSQL_USER: sitepulse_ci`, scoped to `sitepulse_test`), masked `CI_MYSQL_PASSWORD` via `::add-mask::`, used container env references inside `--health-cmd`, and configured loopback-only port binding (`127.0.0.1:33306:3306`).

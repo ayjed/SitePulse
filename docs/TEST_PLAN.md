@@ -78,8 +78,8 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |
 |---|---|---|---|---|
 | 2026-11-24 | `fix/phase-01-foundation-remediation` (PHP 8.4.28 / Windows host) | `php vendor/bin/pest` / `php artisan test` | PASS (29 passed, 190 assertions) | Baseline, genuine Artisan/Encrypter tests, multiline `.env` preservation, atomic write & secret-canary non-leakage on PHP 8.4.28 + SQLite |
-| 2026-11-24 | `fix/phase-01-foundation-remediation` | `php vendor/bin/pint --test` | PASS (29 files) | Code style clean across all PHP files |
-| Pending | GitHub Actions CI (`ubuntu-latest`) | `.github/workflows/ci.yml` (`PHP 8.3`, `PHP 8.4`, `MySQL 8.0`) | NOT RUN | Hardened workflow authored with SHA-pinned actions; requires push/PR trigger on GitHub for remote PHP 8.3 & MySQL 8.0 verification |
+| 2026-11-24 | `c67086960bf0ee28efb8b5508b093bb7d75db9f8` (`fix/phase-01-foundation-remediation`, PR #1 prior run) | GitHub Actions `ci.yml` (`45505787002` `pull_request`, `45505776723` `push`) | CI Jobs PASS; Rejected in Codex PR #1 audit | `PHP 8.3`, `PHP 8.4`, `MySQL 8.0` passed (`29 passed, 190 assertions`), but Codex found 3 merge blockers (`config:cache` `.env` mutation, Windows `tempnam()` `.en*.tmp` non-ignored temp filenames, and `services.mysql` credential exposure in logs) |
+| Pending | `fix/phase-01-foundation-remediation` (PR #1 mandatory corrections) | Local validation (`pint`, `composer audit`, `artisan test`, `npm run build`) + GitHub Actions `ci.yml` | PENDING | Reproduces and guards stale `bootstrap/cache/config.php`, enforces `.env.tmp.<24-hex>` exclusive temp files, and switches `mysql-compatibility` to `docker run --env-file` with masked `openssl rand -hex 24` credentials |
 | TBD | TBD | `pest --testsuite=Security` | NOT RUN | Phase 02 target scope |
 
 > **Rule:** Never mark a test passed without having executed the command and verified the output.

@@ -37,7 +37,7 @@ composer run setup
 
 `composer run setup` runs:
 1. `composer install --no-interaction`
-2. Idempotent environment initialization via `App\Support\EnvironmentSetup::prepare()` (copies `.env.example` to `.env` if missing, generates `APP_KEY` via `artisan key:generate --force` only when a valid key is absent, verifies Laravel's `encrypter` initializes cleanly, and creates `database/database.sqlite` when `DB_CONNECTION=sqlite`)
+2. Idempotent environment initialization via `App\Support\EnvironmentSetup::prepare()` (copies `.env.example` to `.env` if missing; generates a candidate `APP_KEY` via `artisan key:generate --show --no-ansi` only when a valid top-level key is absent; stages the update in an exclusive `0600` `.env.tmp.<24-hex>` file covered by `.gitignore`'s `.env.*` rule — avoiding Windows `tempnam()` `.en*.tmp` prefixes; verifies the candidate against Laravel's `encrypter` and refuses mutation when `bootstrap/cache/config.php` or `APP_CONFIG_CACHE` is cached; atomically publishes `.env` with rollback protection so failures leave `.env` byte-for-byte unchanged and clean up temporary files; and creates `database/database.sqlite` when `DB_CONNECTION=sqlite`)
 3. `php artisan migrate --force`
 4. `npm ci`
 5. `npm run build`

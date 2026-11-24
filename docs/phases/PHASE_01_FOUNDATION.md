@@ -161,7 +161,7 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - Replaced hardcoded `'password'` in `database/factories/UserFactory.php` with `Hash::make(Str::random(32))` while preserving factory test ergonomics and explicit password overrides.
 - Created `app/Support/EnvironmentSetup.php` (`EnvironmentSetup::prepare()`) and updated `composer.json` `setup` and `post-create-project-cmd` scripts so:
   - `.env` is copied from `.env.example` only if missing.
-  - Existing non-empty `APP_KEY` values are detected and preserved across setup retries (`artisan key:generate --force --ansi` runs only when missing/empty).
+  - Existing valid `APP_KEY` values are detected and preserved across setup retries; when missing or empty, `EnvironmentSetup::prepare()` obtains a key candidate via `artisan key:generate --show --no-ansi`, stages `.env.tmp.<24-hex>` (`0600`, matching `.gitignore`'s `.env.*`), verifies staged encryption and checks for active `bootstrap/cache/config.php` (`APP_CONFIG_CACHE`) before atomically publishing `.env` with rollback protection on failure.
   - `database/database.sqlite` is created only when `DB_CONNECTION=sqlite` (excluding `:memory:` and MySQL).
 
 ### 5. Task 5 — Frontend Lockfile & Supported Node Versions
@@ -235,4 +235,19 @@ Triggered by Codex `PASS WITH FINDINGS` audit on `e0aa9f1`:
    - Removed raw Dotenv exception message forwarding (`$e->getMessage()`) and suppressed raw subprocess stderr/stdout leakage during `EnvironmentSetup::prepare()`, emitting safe static diagnostics instead.
    - Added synthetic secret-canary tests verifying zero leakage across `stdout`, `stderr`, and `storage/logs/*.log` for malformed `MAIL_PASSWORD`, unterminated multiline values, invalid `APP_KEY`, missing `artisan`, and read-only `.env`.
 3. **Hardened MySQL GitHub Actions CI (`.github/workflows/ci.yml`):**
-   - Replaced passwordless `root` with `MYSQL_RANDOM_ROOT_PASSWORD: 'yes'` and a dedicated disposable non-root account (`MYSQL_USER: sitepulse_ci`, scoped to `sitepulse_test`), masked `CI_MYSQL_PASSWORD` via `::add-mask::`, used container env references inside `--health-cmd`, and configured loopback-only port binding (`127.0.0.1:33306:3306`).
+   - Historical PR #1 runs (`pull_request` run `45505787002`, `push` run `45505776723` on commit `c67086960bf0ee28efb8b5508b093bb7d75db9f8`) ran `29 passed (190 assertions)` across PHP `8.3` / `8.4` and `MySQL 8.0`, but Codex identified container credential exposure in `services.mysql` initialization and `MYSQL_RANDOM_ROOT_PASSWORD` cleanup logs.
+
+### Task 06 — PR #1 Mandatory Security Corrections (2026-11-25)
+
+Following Codex's `NO-GO FOR MERGE` review on PR #1 (`https://github.com/ayjed/SitePulse/pull/1`, commit `c67086960bf0ee28efb8b5508b093bb7d75db9f8`), applied targeted fixes without altering Phase 01 scope:
+
+1. **Failure-preserving staged `.env` verification (`app/Support/EnvironmentSetup.php`):**
+   - Replaced pre-verification mutation with `artisan key:generate --show --no-ansi` candidate generation, exclusive `.env.tmp.<24-hex>` staging, `verifyStagedApplicationEncryption()` against an isolated `APP_CONFIG_CACHE` probe path, explicit pre-publish check for `bootstrap/cache/config.php` (`APP_CONFIG_CACHE`), and atomic `rename()` with rollback restoration if live `verifyApplicationEncryption()` fails.
+   - Failed setups when `bootstrap/cache/config.php` is cached leave both `.env` and `bootstrap/cache/config.php` byte-for-byte unchanged and clean up staged temporary files.
+
+2. **Git-ignored exclusive temporary `.env` creation on Windows & Unix (`app/Support/EnvironmentSetup.php`):**
+   - Replaced `tempnam()` (which on Windows truncates prefixes to `.enXXXX.tmp` outside `.gitignore`'s `.env.*` rule) with `createExclusiveTempEnvFile()`, opening `.env.tmp.<24-hex>` exclusively via `fopen(..., 'xb')` (`0600`).
+   - Cleaned up deterministically on failure in `finally`; any file abandoned by an abrupt interruption matches `.gitignore`'s `.env.*` rule. Verified with `git check-ignore -v` and `git add -n .` dry-run tests.
+
+3. **Zero-leakage MySQL 8.0 CI workflow (`.github/workflows/ci.yml`):**
+   - Removed `services.mysql` and `CI_MYSQL_PASSWORD`; generated disposable `openssl rand -hex 24` root and `sitepulse_ci` passwords inside the `mysql-compatibility` job, registered `::add-mask::` before creating a `0600` `--env-file` (removed immediately and on `trap EXIT`), bound `mysql:8.0` to `127.0.0.1:33306:3306`, omitted `docker logs` dumps on cleanup (`docker rm -f`), and retained `permissions: contents: read` plus 40-char action SHA pins.

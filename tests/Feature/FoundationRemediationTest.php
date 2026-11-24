@@ -413,6 +413,164 @@ test('environment setup fails nonzero and keeps read-only env untouched without 
     }
 });
 
+test('prepare leaves empty APP_KEY env and cached config byte-for-byte unchanged when bootstrap/cache/config.php is stale', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-cached-empty-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        $originalEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY=\nDB_CONNECTION=sqlite\n";
+        file_put_contents($envPath, $originalEnv);
+
+        $cleanEnv = getenv();
+        if (! is_array($cleanEnv)) {
+            $cleanEnv = [];
+        }
+        foreach (['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_ENV', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE'] as $unsetVar) {
+            unset($cleanEnv[$unsetVar]);
+        }
+
+        $process = proc_open(
+            [PHP_BINARY, $tempDir.DIRECTORY_SEPARATOR.'artisan', 'config:cache'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            $tempDir,
+            $cleanEnv
+        );
+        expect($process)->toBeResource();
+        fclose($pipes[0]);
+        $cacheStdout = stream_get_contents($pipes[1]) ?: '';
+        $cacheStderr = stream_get_contents($pipes[2]) ?: '';
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        expect(proc_close($process))->toBe(0, $cacheStdout.$cacheStderr);
+
+        $cachedConfigPath = $tempDir.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'config.php';
+        expect(is_file($cachedConfigPath))->toBeTrue();
+        $originalCachedConfig = file_get_contents($cachedConfigPath);
+
+        [$exitCode] = runPrepareSubprocess($tempDir);
+
+        expect($exitCode)->not->toBe(0)
+            ->and(file_get_contents($envPath))->toBe($originalEnv)
+            ->and(file_get_contents($cachedConfigPath))->toBe($originalCachedConfig)
+            ->and(glob($tempDir.DIRECTORY_SEPARATOR.'.env.tmp.*'))->toBe([])
+            ->and(glob($tempDir.DIRECTORY_SEPARATOR.'.en*.tmp'))->toBe([]);
+    } finally {
+        \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+    }
+});
+
+test('prepare succeeds idempotently when APP_KEY is valid and bootstrap/cache/config.php is cached with that key', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-cached-valid-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $validKey = 'base64:'.base64_encode(random_bytes(32));
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        $originalEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$validKey}\nDB_CONNECTION=sqlite\n";
+        file_put_contents($envPath, $originalEnv);
+
+        $cleanEnv = getenv();
+        if (! is_array($cleanEnv)) {
+            $cleanEnv = [];
+        }
+        foreach (['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_ENV', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE'] as $unsetVar) {
+            unset($cleanEnv[$unsetVar]);
+        }
+
+        $process = proc_open(
+            [PHP_BINARY, $tempDir.DIRECTORY_SEPARATOR.'artisan', 'config:cache'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            $tempDir,
+            $cleanEnv
+        );
+        expect($process)->toBeResource();
+        fclose($pipes[0]);
+        $cacheStdout = stream_get_contents($pipes[1]) ?: '';
+        $cacheStderr = stream_get_contents($pipes[2]) ?: '';
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        expect(proc_close($process))->toBe(0, $cacheStdout.$cacheStderr);
+
+        $cachedConfigPath = $tempDir.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'config.php';
+        $originalCachedConfig = file_get_contents($cachedConfigPath);
+
+        [$exitCode, $stdout, $stderr] = runPrepareSubprocess($tempDir);
+
+        expect($exitCode)->toBe(0, $stdout.$stderr)
+            ->and(file_get_contents($envPath))->toBe($originalEnv)
+            ->and(file_get_contents($cachedConfigPath))->toBe($originalCachedConfig);
+    } finally {
+        \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+    }
+});
+
+test('createExclusiveTempEnvFile creates .env.tmp.<hex> files ignored by .gitignore and excluded from git add dry-run', function () {
+    $gitDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-gitignore-'.bin2hex(random_bytes(8));
+    expect(@mkdir($gitDir, 0755, true))->toBeTrue();
+    $tempPath = '';
+
+    try {
+        expect(@copy(base_path('.gitignore'), $gitDir.DIRECTORY_SEPARATOR.'.gitignore'))->toBeTrue();
+
+        $runGit = static function (string $cwd, array $args): array {
+            $process = proc_open(
+                array_merge(['git'], $args),
+                [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+                $pipes,
+                $cwd
+            );
+            expect($process)->toBeResource();
+            fclose($pipes[0]);
+            $stdout = stream_get_contents($pipes[1]) ?: '';
+            $stderr = stream_get_contents($pipes[2]) ?: '';
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+
+            return [proc_close($process), $stdout, $stderr];
+        };
+
+        [$initExit, $initOut, $initErr] = $runGit($gitDir, ['init', '-q']);
+        expect($initExit)->toBe(0, $initOut.$initErr);
+
+        $created = \App\Support\EnvironmentSetup::createExclusiveTempEnvFile($gitDir);
+        expect($created)->toBeArray()->toHaveCount(2);
+
+        [$tempPath, $handle] = $created;
+        expect(is_resource($handle))->toBeTrue()
+            ->and(dirname($tempPath))->toBe($gitDir);
+
+        $basename = basename($tempPath);
+        expect($basename)->toMatch('/^\.env\.tmp\.[0-9a-f]{24}$/')
+            ->and($basename)->not->toMatch('/^\.en[0-9a-f]/i');
+
+        expect(fwrite($handle, "APP_KEY=base64:TEMP_CANARY_9182\n"))->toBeInt();
+        expect(fclose($handle))->toBeTrue();
+
+        [$ignoreExit, $ignoreOut, $ignoreErr] = $runGit($gitDir, ['check-ignore', '-v', $basename]);
+        expect($ignoreExit)->toBe(0, $ignoreOut.$ignoreErr)
+            ->and($ignoreOut)->toContain('.env.*')
+            ->and($ignoreOut)->toContain($basename);
+
+        [$repoIgnoreExit, $repoIgnoreOut, $repoIgnoreErr] = $runGit(base_path(), ['check-ignore', '-v', '--no-index', $basename]);
+        expect($repoIgnoreExit)->toBe(0, $repoIgnoreOut.$repoIgnoreErr)
+            ->and($repoIgnoreOut)->toContain('.env.*');
+
+        [$addDryExit, $addDryOut, $addDryErr] = $runGit($gitDir, ['add', '-n', '.']);
+        expect($addDryExit)->toBe(0, $addDryOut.$addDryErr)
+            ->and($addDryOut)->toContain('.gitignore')
+            ->and($addDryOut)->not->toContain($basename)
+            ->and($addDryOut)->not->toContain('.env.tmp.');
+    } finally {
+        if ($tempPath !== '' && is_file($tempPath)) {
+            @unlink($tempPath);
+        }
+        \Illuminate\Support\Facades\File::deleteDirectory($gitDir);
+    }
+});
+
 test('sqlite defaults enforce WAL and 5000ms busy timeout and smtp timeout defaults to 5 seconds', function () {
     expect(config('database.connections.sqlite.journal_mode'))->toBe('wal')
         ->and((int) config('database.connections.sqlite.busy_timeout'))->toBe(5000)

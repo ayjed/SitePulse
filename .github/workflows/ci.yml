@@ -144,30 +144,7 @@ jobs:
     name: PHP 8.3 / MySQL 8.0 Compatibility
     runs-on: ubuntu-latest
 
-    env:
-      CI_MYSQL_PASSWORD: ${{ secrets.CI_MYSQL_PASSWORD || format('sp-ci-{0}-{1}', github.run_id, github.run_attempt) }}
-
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
-          MYSQL_DATABASE: sitepulse_test
-          MYSQL_USER: sitepulse_ci
-          MYSQL_PASSWORD: ${{ env.CI_MYSQL_PASSWORD }}
-        ports:
-          - 127.0.0.1:33306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=6
-          --health-start-period=10s
-
     steps:
-      - name: Mask disposable database password in runner logs
-        run: echo "::add-mask::${{ env.CI_MYSQL_PASSWORD }}"
-
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -207,6 +184,54 @@ jobs:
           npm ci --no-fund
           npm run build
 
+      - name: Start isolated MySQL 8.0 container with masked disposable credentials
+        run: |
+          set -euo pipefail
+          ROOT_PASS="$(openssl rand -hex 24)"
+          USER_PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::${ROOT_PASS}"
+          echo "::add-mask::${USER_PASS}"
+
+          umask 077
+          ENV_FILE="$(mktemp)"
+          trap 'rm -f "${ENV_FILE}"' EXIT
+
+          cat <<EOF > "${ENV_FILE}"
+          MYSQL_ROOT_PASSWORD=${ROOT_PASS}
+          MYSQL_DATABASE=sitepulse_test
+          MYSQL_USER=sitepulse_ci
+          MYSQL_PASSWORD=${USER_PASS}
+          EOF
+
+          docker run -d \
+            --name sitepulse-ci-mysql \
+            --restart no \
+            -p 127.0.0.1:33306:3306 \
+            --env-file "${ENV_FILE}" \
+            --health-cmd="mysqladmin ping -h 127.0.0.1" \
+            --health-interval=5s \
+            --health-timeout=5s \
+            --health-retries=12 \
+            --health-start-period=10s \
+            mysql:8.0 >/dev/null
+
+          rm -f "${ENV_FILE}"
+          echo "DB_PASSWORD=${USER_PASS}" >> "${GITHUB_ENV}"
+          unset ROOT_PASS USER_PASS
+
+          for attempt in $(seq 1 30); do
+            STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' sitepulse-ci-mysql 2>/dev/null || echo 'unknown')"
+            if [ "${STATUS}" = "healthy" ]; then
+              echo "MySQL 8.0 container is healthy."
+              break
+            fi
+            if [ "${attempt}" -eq 30 ]; then
+              echo "MySQL 8.0 container did not reach healthy state (last status: ${STATUS})."
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Prepare environment file without persisting DB credentials
         run: |
           cp .env.example .env
@@ -217,13 +242,12 @@ jobs:
           '
           php -r 'require "vendor/autoload.php"; exit(\App\Support\EnvironmentSetup::prepare(getcwd() ?: "."));'
 
-      - name: Wait for MySQL 8.0 service user readiness
+      - name: Wait for MySQL 8.0 disposable user readiness
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: '33306'
           DB_DATABASE: sitepulse_test
           DB_USERNAME: sitepulse_ci
-          DB_PASSWORD: ${{ env.CI_MYSQL_PASSWORD }}
         run: |
           php -r '
             $dsn = sprintf("mysql:host=%s;port=%s;dbname=%s", getenv("DB_HOST"), getenv("DB_PORT"), getenv("DB_DATABASE"));
@@ -247,7 +271,6 @@ jobs:
           DB_PORT: '33306'
           DB_DATABASE: sitepulse_test
           DB_USERNAME: sitepulse_ci
-          DB_PASSWORD: ${{ env.CI_MYSQL_PASSWORD }}
         run: |
           php artisan migrate:fresh --force --no-interaction
           php artisan db:seed --force --no-interaction
@@ -267,7 +290,10 @@ jobs:
           DB_PORT: '33306'
           DB_DATABASE: sitepulse_test
           DB_USERNAME: sitepulse_ci
-          DB_PASSWORD: ${{ env.CI_MYSQL_PASSWORD }}
         run: |
           php artisan config:clear --ansi
           php artisan test
+
+      - name: Stop and remove MySQL 8.0 container
+        if: always()
+        run: docker rm -f sitepulse-ci-mysql >/dev/null 2>&1 || true

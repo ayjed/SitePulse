@@ -10,41 +10,62 @@ use Throwable;
 
 class EnvironmentSetup
 {
+    private const TEMP_ENV_PREFIX = '.env.tmp.';
+
+    private const RECOVERY_ENV_PREFIX = '.env.recovery.';
+
     /**
-     * Prepare the local environment file, application key, and SQLite database idempotently.
+     * Prepare the local .env file, application encryption key, and SQLite database idempotently.
+     *
+     * Supported filesystem assumptions:
+     * - Target `.env` (and `.env.example` when seeding) must be regular, non-symlink files with link count <= 1.
+     * - Atomic same-directory rename requires write permission on the parent directory (and non-readonly target on Windows).
+     * - POSIX `0600` mode restrictions apply on Unix-like systems; on Windows `chmod()` only toggles the DOS read-only bit
+     *   and directory NTFS ACLs govern read/write access.
+     *
+     * @param  null|callable(string, string): (int|bool)  $postPublishVerifier  Optional test seam invoked only after `.env` publication.
      */
-    public static function prepare(string $basePath): int
+    public static function prepare(string $basePath, ?callable $postPublishVerifier = null): int
     {
         $basePath = rtrim($basePath, '\\/');
         $envPath = $basePath.DIRECTORY_SEPARATOR.'.env';
         $examplePath = $basePath.DIRECTORY_SEPARATOR.'.env.example';
-        $createdEnvFromExample = false;
+        $sqlitePath = $basePath.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'database.sqlite';
 
-        if (! file_exists($envPath)) {
-            if (! file_exists($examplePath)) {
-                fwrite(STDERR, "Missing .env.example in {$basePath}.\n");
+        if (! self::assertSafeDestinationPath($envPath, '.env')) {
+            return 1;
+        }
+
+        clearstatcache(true, $envPath);
+        $targetExistedInitially = file_exists($envPath);
+        $originalContents = null;
+
+        if ($targetExistedInitially) {
+            try {
+                $originalContents = self::readRawFile($envPath);
+                $sourceContents = $originalContents;
+            } catch (Throwable) {
+                fwrite(STDERR, "Setup failed: unable to read .env without modifying target configuration.\n");
 
                 return 1;
             }
-
-            if (! self::copyExampleEnvAtomically($examplePath, $envPath)) {
-                fwrite(STDERR, "Unable to copy .env.example to .env.\n");
-
+        } else {
+            if (! self::assertSafeSourceFile($examplePath, '.env.example')) {
                 return 1;
             }
 
-            $createdEnvFromExample = true;
-            echo "Created .env from .env.example.\n";
+            try {
+                $sourceContents = self::readRawFile($examplePath);
+            } catch (Throwable) {
+                fwrite(STDERR, "Setup failed: unable to read .env.example.\n");
+
+                return 1;
+            }
         }
 
         try {
-            $originalContents = self::readRawFile($envPath);
-            $parsedEnv = Dotenv::parse($originalContents);
+            $parsedEnv = Dotenv::parse($sourceContents);
         } catch (Throwable) {
-            if ($createdEnvFromExample) {
-                @unlink($envPath);
-            }
-
             fwrite(STDERR, "Invalid .env file syntax; aborting setup without modifying .env.\n");
 
             return 1;
@@ -52,43 +73,113 @@ class EnvironmentSetup
 
         $cipher = self::resolveCipher($parsedEnv);
         $rawKey = $parsedEnv['APP_KEY'] ?? null;
+        $needsNewKey = $rawKey === null || $rawKey === '';
 
-        if ($rawKey === null || $rawKey === '') {
-            $exitCode = self::stageVerifyAndPublishAppKey($basePath, $envPath, $originalContents, $parsedEnv, $cipher);
-            if ($exitCode !== 0) {
-                if ($createdEnvFromExample && is_file($envPath)) {
-                    @unlink($envPath);
-                }
-
-                return $exitCode;
-            }
-        } else {
-            if (! self::isValidAppKey($rawKey, $cipher) || self::verifyApplicationEncryption($basePath) !== 0) {
-                fwrite(STDERR, "Existing APP_KEY in .env is invalid or cannot initialize Laravel encryption (if bootstrap/cache/config.php is cached, clear it with `php artisan config:clear`); .env was left unchanged.\n");
+        if (! $needsNewKey) {
+            if (! self::isValidAppKey($rawKey, $cipher)) {
+                fwrite(STDERR, "Existing APP_KEY in .env is invalid for cipher {$cipher}; .env was left unchanged.\n");
 
                 return 1;
             }
 
-            echo "Existing APP_KEY detected; preserving current key.\n";
-        }
+            if (self::verifyEffectiveEncryption($basePath, $rawKey, $cipher) !== 0) {
+                fwrite(STDERR, "Existing APP_KEY in .env does not match Laravel's effective encryption key (check active .env.<APP_ENV> overrides or run `php artisan config:clear`); .env and unrelated environment files were left unchanged.\n");
 
-        $sqlitePath = $basePath.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'database.sqlite';
-
-        try {
-            self::ensureSqliteDatabase($envPath, $sqlitePath, $basePath, $parsedEnv);
-        } catch (RuntimeException $e) {
-            if ($createdEnvFromExample && is_file($envPath)) {
-                @unlink($envPath);
-            } elseif (self::readRawFileOrNull($envPath) !== $originalContents) {
-                self::writeFileAtomically($envPath, $originalContents);
+                return 1;
             }
 
-            fwrite(STDERR, $e->getMessage()."\n");
+            if ($targetExistedInitially) {
+                echo "Existing APP_KEY detected; preserving current key.\n";
+
+                return self::runPostPublishSteps(
+                    $basePath,
+                    $envPath,
+                    $sqlitePath,
+                    $parsedEnv,
+                    false,
+                    true,
+                    $originalContents,
+                    $postPublishVerifier
+                );
+            }
+
+            if (! self::writeFileAtomically($envPath, $sourceContents)) {
+                fwrite(STDERR, "Setup failed: unable to publish initial .env from .env.example.\n");
+
+                return 1;
+            }
+
+            $createdCode = self::runPostPublishSteps(
+                $basePath,
+                $envPath,
+                $sqlitePath,
+                $parsedEnv,
+                true,
+                false,
+                null,
+                $postPublishVerifier
+            );
+
+            if ($createdCode === 0) {
+                echo "Created .env from .env.example.\n";
+            }
+
+            return $createdCode;
+        }
+
+        $blockingVariant = self::resolveActiveEnvVariant($basePath);
+        if ($blockingVariant !== null) {
+            $activeEnv = self::readProcessEnv('APP_ENV');
+            fwrite(
+                STDERR,
+                "Setup failed: {$blockingVariant} overrides .env while APP_ENV={$activeEnv} is active; .env and {$blockingVariant} were left unchanged.\n"
+            );
 
             return 1;
         }
 
-        return 0;
+        $cachedConfigPath = self::resolveCachedConfigPath($basePath);
+        if (is_file($cachedConfigPath)) {
+            fwrite(
+                STDERR,
+                "Setup failed: Laravel configuration cache exists at {$cachedConfigPath} and overrides .env. Run `php artisan config:clear` and retry setup; .env and cached config were left unchanged.\n"
+            );
+
+            return 1;
+        }
+
+        $publishResult = self::stageVerifyAndPublishNewKey(
+            $basePath,
+            $envPath,
+            $sourceContents,
+            $parsedEnv,
+            $cipher
+        );
+
+        if ($publishResult === null) {
+            return 1;
+        }
+
+        $exitCode = self::runPostPublishSteps(
+            $basePath,
+            $envPath,
+            $sqlitePath,
+            $publishResult,
+            true,
+            $targetExistedInitially,
+            $originalContents,
+            $postPublishVerifier
+        );
+
+        if ($exitCode === 0) {
+            if (! $targetExistedInitially) {
+                echo "Created .env from .env.example.\n";
+            }
+
+            echo "Application key set successfully.\n";
+        }
+
+        return $exitCode;
     }
 
     /**
@@ -115,63 +206,28 @@ class EnvironmentSetup
      */
     public static function isValidAppKey(string $key, string $cipher = 'AES-256-CBC'): bool
     {
-        if ($key === '') {
-            return false;
-        }
-
-        $material = $key;
-        if (str_starts_with($key, 'base64:')) {
-            $decoded = base64_decode(substr($key, 7), true);
-            if ($decoded === false) {
-                return false;
-            }
-            $material = $decoded;
-        }
-
-        if (! Encrypter::supported($material, $cipher)) {
-            return false;
-        }
-
-        try {
-            new Encrypter($material, $cipher);
-
-            return true;
-        } catch (Throwable) {
-            return false;
-        }
+        return self::decodeAppKeyMaterial($key, $cipher) !== null;
     }
 
     /**
-     * Generate a deterministic, Git-ignored temporary .env filename (never relying on Windows
-     * tempnam() 3-character prefix truncation such as .enXXXX.tmp) and open it exclusively.
-     *
-     * Any temporary file abandoned by an abrupt interruption matches .gitignore's `.env.*` rule.
+     * Create an exclusive `.env.tmp.<24-hex>` file in the given directory (avoiding Windows
+     * tempnam() 3-character `.enXXXX.tmp` prefix truncation) so `.gitignore`'s `.env.*` matches it.
      *
      * @return array{0: string, 1: resource}|null
      */
     public static function createExclusiveTempEnvFile(string $directory): ?array
     {
-        if (! is_dir($directory) || ! is_writable($directory)) {
-            return null;
-        }
+        return self::createExclusivePrefixedFile($directory, self::TEMP_ENV_PREFIX);
+    }
 
-        for ($attempt = 0; $attempt < 16; $attempt++) {
-            $filename = '.env.tmp.'.bin2hex(random_bytes(12));
-            $candidatePath = $directory.DIRECTORY_SEPARATOR.$filename;
-
-            if (is_link($candidatePath) || file_exists($candidatePath)) {
-                continue;
-            }
-
-            $handle = @fopen($candidatePath, 'xb');
-            if (is_resource($handle)) {
-                @chmod($candidatePath, 0600);
-
-                return [$candidatePath, $handle];
-            }
-        }
-
-        return null;
+    /**
+     * Create an exclusive `.env.recovery.<24-hex>` file covered by `.gitignore`'s `.env.*` rule.
+     *
+     * @return array{0: string, 1: resource}|null
+     */
+    public static function createExclusiveRecoveryEnvFile(string $directory): ?array
+    {
+        return self::createExclusivePrefixedFile($directory, self::RECOVERY_ENV_PREFIX);
     }
 
     /**
@@ -217,6 +273,11 @@ class EnvironmentSetup
             if (! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
                 throw new RuntimeException("Unable to create SQLite directory at {$directory}.");
             }
+        }
+
+        clearstatcache(true, $targetPath);
+        if (is_link($targetPath)) {
+            throw new RuntimeException("SQLite database path {$targetPath} must not be a symbolic link.");
         }
 
         if (file_exists($targetPath)) {
@@ -265,59 +326,77 @@ class EnvironmentSetup
     }
 
     /**
-     * Verify in a fresh subprocess that Laravel's real encryption service initializes cleanly.
+     * Verify in a fresh subprocess that Laravel boots and initializes encryption using the
+     * exact APP_KEY defined in `.env` (neutralizing inherited APP_KEY/APP_CIPHER overrides).
      */
     public static function verifyApplicationEncryption(string $basePath): int
     {
-        return self::runEncryptionProbe($basePath, null, false);
+        $basePath = rtrim($basePath, '\\/');
+        $envPath = $basePath.DIRECTORY_SEPARATOR.'.env';
+
+        if (! self::assertSafeDestinationPath($envPath, '.env', mustExist: true)) {
+            return 1;
+        }
+
+        try {
+            $parsed = self::parseEnvFile($envPath);
+        } catch (Throwable) {
+            return 1;
+        }
+
+        $key = $parsed['APP_KEY'] ?? null;
+        $cipher = self::resolveCipher($parsed);
+        if (! is_string($key) || ! self::isValidAppKey($key, $cipher)) {
+            return 1;
+        }
+
+        return self::verifyEffectiveEncryption($basePath, $key, $cipher);
     }
 
     /**
-     * Verify candidate staged .env content against Laravel's real encryption service before publishing.
-     */
-    public static function verifyStagedApplicationEncryption(string $basePath, string $stagedEnvBasename): int
-    {
-        return self::runEncryptionProbe($basePath, $stagedEnvBasename, true);
-    }
-
-    /**
-     * Generate, stage, verify, and atomically publish a new APP_KEY without altering .env on failure.
+     * Generate, stage, verify in a bound Laravel subprocess, and atomically publish a new APP_KEY.
      *
-     * @param  array<string, string|null>  $parsedEnv
+     * @param  array<string, string|null>  $parsedSourceEnv
+     * @return array<string, string|null>|null
      */
-    private static function stageVerifyAndPublishAppKey(
+    private static function stageVerifyAndPublishNewKey(
         string $basePath,
         string $envPath,
-        string $originalContents,
-        array $parsedEnv,
+        string $sourceContents,
+        array $parsedSourceEnv,
         string $cipher
-    ): int {
+    ): ?array {
         $generatedKey = self::generateArtisanAppKey($basePath);
         if ($generatedKey === null || ! self::isValidAppKey($generatedKey, $cipher)) {
             fwrite(STDERR, "Setup failed: unable to generate a valid APP_KEY.\n");
 
-            return 1;
+            return null;
         }
 
-        $proposedContents = self::buildUpdatedEnvWithAppKey($originalContents, $generatedKey);
-        if ($proposedContents === null || ! self::verifyProposedEnvPreservesUnrelatedVariables($parsedEnv, $proposedContents, $generatedKey, $cipher)) {
+        $proposedContents = self::buildUpdatedEnvWithAppKey($sourceContents, $generatedKey);
+        $proposedParsed = $proposedContents !== null
+            ? self::parseAndVerifyProposedEnv($parsedSourceEnv, $proposedContents, $generatedKey, $cipher)
+            : null;
+
+        if ($proposedContents === null || $proposedParsed === null) {
             fwrite(STDERR, "Setup failed: unable to safely update top-level APP_KEY without altering unrelated .env entries.\n");
 
-            return 1;
+            return null;
         }
 
         $directory = dirname($envPath);
+        clearstatcache(true, $envPath);
         if (is_file($envPath) && ! is_writable($envPath)) {
             fwrite(STDERR, "Setup failed: .env is not writable.\n");
 
-            return 1;
+            return null;
         }
 
         $tempCreated = self::createExclusiveTempEnvFile($directory);
         if ($tempCreated === null) {
             fwrite(STDERR, "Setup failed: unable to create exclusive temporary .env file.\n");
 
-            return 1;
+            return null;
         }
 
         [$stagedPath, $handle] = $tempCreated;
@@ -326,20 +405,17 @@ class EnvironmentSetup
             if (! self::writeAndCloseTempHandle($handle, $proposedContents)) {
                 fwrite(STDERR, "Setup failed: unable to stage temporary .env file.\n");
 
-                return 1;
+                return null;
             }
 
-            if (self::verifyStagedApplicationEncryption($basePath, basename($stagedPath)) !== 0) {
+            if (self::verifyBoundStagedEncryption($basePath, basename($stagedPath), $generatedKey, $cipher) !== 0) {
                 fwrite(STDERR, "Setup failed: candidate APP_KEY failed Laravel encryption verification; .env was left unchanged.\n");
 
-                return 1;
+                return null;
             }
 
-            $cachedConfigPath = self::resolveCachedConfigPath($basePath);
-            if (is_file($cachedConfigPath)) {
-                fwrite(STDERR, "Setup failed: Laravel configuration cache exists at {$cachedConfigPath} and overrides .env. Run `php artisan config:clear` and retry setup; .env and cached config were left unchanged.\n");
-
-                return 1;
+            if (! self::assertSafeDestinationPath($envPath, '.env')) {
+                return null;
             }
 
             self::applyPublishedPermissions($stagedPath, $envPath);
@@ -347,59 +423,254 @@ class EnvironmentSetup
             if (! @rename($stagedPath, $envPath)) {
                 fwrite(STDERR, "Setup failed: unable to atomically publish .env.\n");
 
-                return 1;
+                return null;
             }
 
             $stagedPath = '';
 
-            if (self::verifyApplicationEncryption($basePath) !== 0) {
-                self::writeFileAtomically($envPath, $originalContents);
-                fwrite(STDERR, "Setup failed: live Laravel encryption verification failed after publication; original .env was restored.\n");
-
-                return 1;
-            }
+            return $proposedParsed;
         } finally {
             if ($stagedPath !== '' && is_file($stagedPath)) {
                 @unlink($stagedPath);
             }
         }
-
-        echo "Application key set successfully.\n";
-
-        return 0;
     }
 
-    private static function runEncryptionProbe(
+    /**
+     * Execute post-publication steps and run verified rollback if `.env` was modified during setup.
+     *
+     * @param  array<string, string|null>  $targetParsedEnv
+     * @param  null|callable(string, string): (int|bool)  $postPublishVerifier
+     */
+    private static function runPostPublishSteps(
         string $basePath,
-        ?string $envFileOverride,
-        bool $bypassConfigCache
+        string $envPath,
+        string $sqlitePath,
+        array $targetParsedEnv,
+        bool $envWasPublished,
+        bool $targetExistedInitially,
+        ?string $originalContents,
+        ?callable $postPublishVerifier
     ): int {
-        $bootstrapApp = $basePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'app.php';
-        if (! is_file($bootstrapApp)) {
-            fwrite(STDERR, "Missing bootstrap/app.php in {$basePath}.\n");
+        $failureReason = null;
+
+        try {
+            self::ensureSqliteDatabase($envPath, $sqlitePath, $basePath, $targetParsedEnv);
+        } catch (RuntimeException $e) {
+            $failureReason = $e->getMessage();
+        }
+
+        if ($failureReason === null && $postPublishVerifier !== null) {
+            try {
+                $hookResult = $postPublishVerifier($basePath, $envPath);
+                if ($hookResult === false || (is_int($hookResult) && $hookResult !== 0)) {
+                    $failureReason = 'Post-publication verification check failed.';
+                }
+            } catch (Throwable) {
+                $failureReason = 'Post-publication verification check threw an exception.';
+            }
+        }
+
+        if ($failureReason === null) {
+            return 0;
+        }
+
+        if (! $envWasPublished) {
+            fwrite(STDERR, $failureReason."\n");
 
             return 1;
         }
 
-        $autoloadPath = self::resolveAutoloadPath($basePath);
-        if ($autoloadPath === null) {
-            fwrite(STDERR, "Missing Composer autoload.php for encryption verification.\n");
+        self::rollbackPublishedTarget($envPath, $targetExistedInitially, $originalContents, $failureReason);
 
+        return 1;
+    }
+
+    /**
+     * Restore the target `.env` state after a post-publication failure and verify the resulting bytes.
+     * Never reports successful restoration unless disk state is actually verified recovered.
+     */
+    private static function rollbackPublishedTarget(
+        string $envPath,
+        bool $targetExistedInitially,
+        ?string $originalContents,
+        string $failureReason
+    ): void {
+        if (! $targetExistedInitially || $originalContents === null) {
+            clearstatcache(true, $envPath);
+            if (! is_link($envPath) && file_exists($envPath)) {
+                @unlink($envPath);
+            }
+
+            clearstatcache(true, $envPath);
+            if (! file_exists($envPath) && ! is_link($envPath)) {
+                fwrite(STDERR, "Setup failed ({$failureReason}); newly created .env was verified removed.\n");
+
+                return;
+            }
+
+            fwrite(
+                STDERR,
+                "Setup failed ({$failureReason}); rollback failed: newly created .env could not be removed and remains on disk at {$envPath}.\n"
+            );
+
+            return;
+        }
+
+        $restoredWrite = self::writeFileAtomically($envPath, $originalContents);
+        clearstatcache(true, $envPath);
+        $currentBytes = self::readRawFileOrNull($envPath);
+
+        if ($restoredWrite && $currentBytes === $originalContents) {
+            fwrite(STDERR, "Setup failed ({$failureReason}); original .env bytes were verified restored.\n");
+
+            return;
+        }
+
+        $recoveryPath = self::preserveRecoveryCopy(dirname($envPath), $originalContents);
+        $remainingState = $currentBytes === null
+            ? "target .env at {$envPath} is unreadable or missing after failed rollback"
+            : "modified configuration remains on disk at {$envPath}";
+
+        $recoveryDetail = $recoveryPath !== null
+            ? " Protected recovery copy of original .env was preserved at {$recoveryPath}."
+            : ' Protected recovery copy could not be written.';
+
+        fwrite(
+            STDERR,
+            "Setup failed ({$failureReason}); rollback failed: {$remainingState}.{$recoveryDetail}\n"
+        );
+    }
+
+    /**
+     * Persist an exclusive recovery file containing the original `.env` bytes when rollback fails.
+     */
+    private static function preserveRecoveryCopy(string $preferredDirectory, string $originalContents): ?string
+    {
+        $candidates = [
+            [$preferredDirectory, self::RECOVERY_ENV_PREFIX],
+            [sys_get_temp_dir(), 'sitepulse-.env-recovery.'],
+        ];
+
+        foreach ($candidates as [$directory, $prefix]) {
+            $created = self::createExclusivePrefixedFile($directory, $prefix);
+            if ($created === null) {
+                continue;
+            }
+
+            [$recoveryPath, $handle] = $created;
+            if (! self::writeAndCloseTempHandle($handle, $originalContents)) {
+                @unlink($recoveryPath);
+
+                continue;
+            }
+
+            @chmod($recoveryPath, 0600);
+            clearstatcache(true, $recoveryPath);
+            if (self::readRawFileOrNull($recoveryPath) === $originalContents) {
+                return $recoveryPath;
+            }
+
+            @unlink($recoveryPath);
+        }
+
+        return null;
+    }
+
+    private static function verifyBoundStagedEncryption(
+        string $basePath,
+        string $stagedBasename,
+        string $expectedKey,
+        string $cipher
+    ): int {
+        return self::runLaravelKeyVerificationProbe(
+            $basePath,
+            $expectedKey,
+            $cipher,
+            loadEnvFile: $stagedBasename,
+            expectedEnvFile: $stagedBasename,
+            bypassConfigCache: true,
+            neutralizeAppEnv: true
+        );
+    }
+
+    private static function verifyEffectiveEncryption(
+        string $basePath,
+        string $expectedKey,
+        string $cipher
+    ): int {
+        return self::runLaravelKeyVerificationProbe(
+            $basePath,
+            $expectedKey,
+            $cipher,
+            loadEnvFile: null,
+            expectedEnvFile: '.env',
+            bypassConfigCache: false,
+            neutralizeAppEnv: false
+        );
+    }
+
+    private static function runLaravelKeyVerificationProbe(
+        string $basePath,
+        string $expectedKey,
+        string $cipher,
+        ?string $loadEnvFile,
+        ?string $expectedEnvFile,
+        bool $bypassConfigCache,
+        bool $neutralizeAppEnv
+    ): int {
+        $rawMaterial = self::decodeAppKeyMaterial($expectedKey, $cipher);
+        if ($rawMaterial === null) {
+            return 1;
+        }
+
+        $bootstrapApp = $basePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'app.php';
+        $autoloadPath = self::resolveAutoloadPath($basePath);
+        if (! is_file($bootstrapApp) || $autoloadPath === null) {
+            return 1;
+        }
+
+        $probePayload = json_encode([
+            'configKeyHash' => hash('sha256', $expectedKey),
+            'rawKeyHash' => hash('sha256', $rawMaterial),
+            'cipher' => $cipher,
+            'loadEnvFile' => $loadEnvFile ?? '',
+            'expectedEnvFile' => $expectedEnvFile ?? '',
+        ]);
+
+        if (! is_string($probePayload)) {
             return 1;
         }
 
         $probeScript = <<<'PHP'
 try {
+    $input = json_decode((string) stream_get_contents(STDIN), true, 16, JSON_THROW_ON_ERROR);
     require $argv[2];
-    $app = require $argv[1] . DIRECTORY_SEPARATOR . 'bootstrap' . DIRECTORY_SEPARATOR . 'app.php';
-    if ($argv[3] !== '') {
-        $app->loadEnvironmentFrom($argv[3]);
+    $app = require $argv[1].DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'app.php';
+    if (($input['loadEnvFile'] ?? '') !== '') {
+        $app->loadEnvironmentFrom((string) $input['loadEnvFile']);
     }
     $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    if (! $app->configurationIsCached()
+        && ($input['expectedEnvFile'] ?? '') !== ''
+        && $app->environmentFile() !== (string) $input['expectedEnvFile']) {
+        exit(11);
+    }
+    $config = $app->make('config')->get('app');
+    if (! is_array($config)
+        || strcasecmp((string) ($config['cipher'] ?? ''), (string) $input['cipher']) !== 0
+        || ! hash_equals((string) $input['configKeyHash'], hash('sha256', (string) ($config['key'] ?? '')))) {
+        exit(12);
+    }
     $encrypter = $app->make('encrypter');
+    $actualRawKey = method_exists($encrypter, 'getKey') ? $encrypter->getKey() : null;
+    if (! is_string($actualRawKey)
+        || ! hash_equals((string) $input['rawKeyHash'], hash('sha256', $actualRawKey))) {
+        exit(13);
+    }
     $payload = $encrypter->encrypt('sitepulse-key-verification');
     if ($encrypter->decrypt($payload) !== 'sitepulse-key-verification') {
-        exit(1);
+        exit(14);
     }
 } catch (\Throwable) {
     exit(1);
@@ -409,19 +680,26 @@ PHP;
         $extraEnv = [];
         if ($bypassConfigCache) {
             $extraEnv['APP_CONFIG_CACHE'] = 'bootstrap/cache/.sitepulse-probe-nocache-'.bin2hex(random_bytes(6)).'.php';
+        } elseif (($activeConfigCache = self::readProcessEnv('APP_CONFIG_CACHE')) !== null) {
+            $extraEnv['APP_CONFIG_CACHE'] = $activeConfigCache;
+        }
+
+        if (! $neutralizeAppEnv && ($activeAppEnv = self::readProcessEnv('APP_ENV')) !== null) {
+            $extraEnv['APP_ENV'] = $activeAppEnv;
         }
 
         [$exitCode] = self::runSubprocess(
-            [PHP_BINARY, '-r', $probeScript, $basePath, $autoloadPath, $envFileOverride ?? ''],
+            [PHP_BINARY, '-r', $probeScript, $basePath, $autoloadPath],
             $basePath,
-            $extraEnv
+            $extraEnv,
+            $probePayload
         );
 
         return $exitCode;
     }
 
     /**
-     * Generate a key string via Laravel's genuine Artisan key:generate --show command without mutating .env.
+     * Generate a key string via Laravel's genuine Artisan `key:generate --show` without mutating files.
      */
     protected static function generateArtisanAppKey(string $basePath): ?string
     {
@@ -434,7 +712,8 @@ PHP;
 
         [$exitCode, $stdout] = self::runSubprocess(
             [PHP_BINARY, $artisanPath, 'key:generate', '--show', '--no-ansi'],
-            $basePath
+            $basePath,
+            ['APP_CONFIG_CACHE' => 'bootstrap/cache/.sitepulse-keygen-nocache-'.bin2hex(random_bytes(6)).'.php']
         );
 
         if ($exitCode !== 0) {
@@ -444,6 +723,136 @@ PHP;
         $candidate = trim($stdout);
 
         return $candidate !== '' ? $candidate : null;
+    }
+
+    /**
+     * Decode and validate raw encryption key material matching EncryptionServiceProvider::parseKey().
+     */
+    private static function decodeAppKeyMaterial(string $key, string $cipher = 'AES-256-CBC'): ?string
+    {
+        if ($key === '') {
+            return null;
+        }
+
+        $material = $key;
+        if (str_starts_with($key, 'base64:')) {
+            $decoded = base64_decode(substr($key, 7), true);
+            if ($decoded === false) {
+                return null;
+            }
+            $material = $decoded;
+        }
+
+        if (! Encrypter::supported($material, $cipher)) {
+            return null;
+        }
+
+        try {
+            new Encrypter($material, $cipher);
+
+            return $material;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{0: string, 1: resource}|null
+     */
+    private static function createExclusivePrefixedFile(string $directory, string $prefix): ?array
+    {
+        if (! is_dir($directory) || ! is_writable($directory)) {
+            return null;
+        }
+
+        for ($attempt = 0; $attempt < 16; $attempt++) {
+            $candidatePath = $directory.DIRECTORY_SEPARATOR.$prefix.bin2hex(random_bytes(12));
+
+            clearstatcache(true, $candidatePath);
+            if (is_link($candidatePath) || file_exists($candidatePath)) {
+                continue;
+            }
+
+            $handle = @fopen($candidatePath, 'xb');
+            if (is_resource($handle)) {
+                @chmod($candidatePath, 0600);
+
+                return [$candidatePath, $handle];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Verify destination `.env` path is not a symlink, non-regular file, or multi-hardlinked inode.
+     */
+    private static function assertSafeDestinationPath(string $path, string $label, bool $mustExist = false): bool
+    {
+        clearstatcache(true, $path);
+
+        if (is_link($path)) {
+            fwrite(STDERR, "Setup failed: destination {$label} must not be a symbolic link.\n");
+
+            return false;
+        }
+
+        if (! file_exists($path)) {
+            if ($mustExist) {
+                fwrite(STDERR, "Setup failed: {$label} does not exist.\n");
+
+                return false;
+            }
+
+            return true;
+        }
+
+        $stat = @lstat($path);
+        if (! is_array($stat)) {
+            fwrite(STDERR, "Setup failed: unable to inspect {$label} metadata.\n");
+
+            return false;
+        }
+
+        if ((($stat['mode'] ?? 0) & 0170000) !== 0100000) {
+            fwrite(STDERR, "Setup failed: destination {$label} is not a regular file.\n");
+
+            return false;
+        }
+
+        if (($stat['nlink'] ?? 1) > 1) {
+            fwrite(STDERR, "Setup failed: destination {$label} has multiple hard links, which is unsupported.\n");
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function assertSafeSourceFile(string $path, string $label): bool
+    {
+        clearstatcache(true, $path);
+
+        if (is_link($path)) {
+            fwrite(STDERR, "Setup failed: source {$label} must not be a symbolic link.\n");
+
+            return false;
+        }
+
+        if (! is_file($path) || ! is_readable($path)) {
+            fwrite(STDERR, "Missing or unreadable {$label}.\n");
+
+            return false;
+        }
+
+        $stat = @lstat($path);
+        if (! is_array($stat) || (($stat['mode'] ?? 0) & 0170000) !== 0100000) {
+            fwrite(STDERR, "Setup failed: source {$label} is not a regular file.\n");
+
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -609,41 +1018,34 @@ PHP;
     }
 
     /**
-     * Verify proposed .env content parses cleanly, defines the exact generated APP_KEY,
-     * and leaves every unrelated configuration variable identical.
+     * Verify proposed .env content parses cleanly, sets the exact candidate APP_KEY,
+     * and leaves every unrelated variable identical.
      *
      * @param  array<string, string|null>  $originalParsed
+     * @return array<string, string|null>|null
      */
-    private static function verifyProposedEnvPreservesUnrelatedVariables(
+    private static function parseAndVerifyProposedEnv(
         array $originalParsed,
         string $proposedContents,
         string $expectedKey,
         string $cipher
-    ): bool {
+    ): ?array {
         try {
             $proposedParsed = Dotenv::parse($proposedContents);
         } catch (Throwable) {
-            return false;
+            return null;
         }
 
         $actualKey = $proposedParsed['APP_KEY'] ?? null;
         if (! is_string($actualKey) || $actualKey !== $expectedKey || ! self::isValidAppKey($actualKey, $cipher)) {
-            return false;
+            return null;
         }
 
-        unset($originalParsed['APP_KEY'], $proposedParsed['APP_KEY']);
+        $origWithoutKey = $originalParsed;
+        $propWithoutKey = $proposedParsed;
+        unset($origWithoutKey['APP_KEY'], $propWithoutKey['APP_KEY']);
 
-        return $proposedParsed === $originalParsed;
-    }
-
-    private static function copyExampleEnvAtomically(string $examplePath, string $envPath): bool
-    {
-        $contents = @file_get_contents($examplePath);
-        if (! is_string($contents)) {
-            return false;
-        }
-
-        return self::writeFileAtomically($envPath, $contents);
+        return $propWithoutKey === $origWithoutKey ? $proposedParsed : null;
     }
 
     /**
@@ -652,7 +1054,12 @@ PHP;
      */
     private static function writeFileAtomically(string $targetPath, string $contents): bool
     {
+        if (! self::assertSafeDestinationPath($targetPath, basename($targetPath))) {
+            return false;
+        }
+
         $directory = dirname($targetPath);
+        clearstatcache(true, $targetPath);
         if (is_file($targetPath) && ! is_writable($targetPath)) {
             return false;
         }
@@ -711,10 +1118,27 @@ PHP;
         @chmod($tempPath, 0600);
     }
 
+    /**
+     * Detect an active Laravel environment-specific variant file (such as `.env.testing` or `.env.local`)
+     * selected by process APP_ENV in LoadEnvironmentVariables::checkForSpecificEnvironmentFile().
+     */
+    private static function resolveActiveEnvVariant(string $basePath): ?string
+    {
+        $activeEnv = self::readProcessEnv('APP_ENV');
+        if ($activeEnv === null || str_contains($activeEnv, '/') || str_contains($activeEnv, '\\') || $activeEnv === 'example') {
+            return null;
+        }
+
+        $variantName = '.env.'.$activeEnv;
+        $variantPath = $basePath.DIRECTORY_SEPARATOR.$variantName;
+
+        return is_file($variantPath) ? $variantName : null;
+    }
+
     private static function resolveCachedConfigPath(string $basePath): string
     {
-        $envOverride = getenv('APP_CONFIG_CACHE');
-        if (is_string($envOverride) && $envOverride !== '') {
+        $envOverride = self::readProcessEnv('APP_CONFIG_CACHE');
+        if ($envOverride !== null) {
             return self::resolvePath($envOverride, $basePath);
         }
 
@@ -723,14 +1147,18 @@ PHP;
 
     /**
      * Execute a subprocess via argument array so special path characters (such as spaces and '!')
-     * bypass shell interpolation on Windows and Unix hosts without leaking child output.
+     * bypass shell interpolation cleanly without leaking child output.
      *
      * @param  list<string>  $command
      * @param  array<string, string>  $extraEnv
      * @return array{int, string}
      */
-    private static function runSubprocess(array $command, string $cwd, array $extraEnv = []): array
-    {
+    private static function runSubprocess(
+        array $command,
+        string $cwd,
+        array $extraEnv = [],
+        string $stdin = ''
+    ): array {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -742,6 +1170,9 @@ PHP;
             return [1, ''];
         }
 
+        if ($stdin !== '') {
+            @fwrite($pipes[0], $stdin);
+        }
         fclose($pipes[0]);
         $stdout = stream_get_contents($pipes[1]);
         stream_get_contents($pipes[2]);
@@ -754,14 +1185,22 @@ PHP;
     }
 
     /**
-     * Return inherited environment variables with APP_KEY/APP_PREVIOUS_KEYS stripped so
-     * target project .env files are evaluated directly rather than masked by parent test env.
+     * Neutralize inherited encryption/environment overrides (APP_KEY, APP_PREVIOUS_KEYS, APP_CIPHER,
+     * APP_ENV, APP_CONFIG_CACHE) so child verification probes cannot read stale parent secrets or config.
      *
      * @param  array<string, string>  $extraEnv
      * @return array<string, string>
      */
     private static function cleanChildEnvironment(array $extraEnv = []): array
     {
+        $stripUpper = [
+            'APP_KEY' => true,
+            'APP_PREVIOUS_KEYS' => true,
+            'APP_CIPHER' => true,
+            'APP_ENV' => true,
+            'APP_CONFIG_CACHE' => true,
+        ];
+
         $env = getenv();
         if (! is_array($env)) {
             return $extraEnv;
@@ -774,7 +1213,7 @@ PHP;
             }
 
             $upper = strtoupper($name);
-            if ($upper === 'APP_KEY' || $upper === 'APP_PREVIOUS_KEYS' || array_key_exists($name, $extraEnv)) {
+            if (isset($stripUpper[$upper])) {
                 continue;
             }
 
@@ -782,6 +1221,17 @@ PHP;
         }
 
         return array_merge($filtered, $extraEnv);
+    }
+
+    private static function readProcessEnv(string $name): ?string
+    {
+        foreach ([$_ENV[$name] ?? null, $_SERVER[$name] ?? null, getenv($name)] as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     private static function readRawFile(string $envPath): string

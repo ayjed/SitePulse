@@ -511,10 +511,365 @@ test('prepare succeeds idempotently when APP_KEY is valid and bootstrap/cache/co
     }
 });
 
-test('createExclusiveTempEnvFile creates .env.tmp.<hex> files ignored by .gitignore and excluded from git add dry-run', function () {
+function runPrepareWithEnvSubprocess(string $workspacePath, array $envOverrides = [], array $unsetVars = [], ?string $inlineScript = null): array
+{
+    $script = $inlineScript ?? 'require $argv[1]; exit(\App\Support\EnvironmentSetup::prepare($argv[2]));';
+    $env = getenv();
+    if (! is_array($env)) {
+        $env = [];
+    }
+
+    foreach ($unsetVars as $name) {
+        unset($env[$name]);
+    }
+    foreach ($envOverrides as $name => $value) {
+        $env[$name] = $value;
+    }
+
+    $process = proc_open(
+        [PHP_BINARY, '-r', $script, base_path('vendor/autoload.php'), $workspacePath],
+        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+        $pipes,
+        $workspacePath,
+        $env
+    );
+
+    expect(is_resource($process))->toBeTrue();
+
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return [proc_close($process), $stdout, $stderr];
+}
+
+test('successful rollback after post-publication failure verifies restored .env bytes without leftover artifacts', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-rollback-ok-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        $originalEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nMAIL_PASSWORD=CANARY_ROLLBACK_OK_9184\nAPP_KEY=\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $originalEnv);
+
+        $script = <<<'PHP'
+require $argv[1];
+$publishedKey = null;
+$exit = \App\Support\EnvironmentSetup::prepare($argv[2], function (string $base, string $targetEnv) use (&$publishedKey): int {
+    $publishedKey = \App\Support\EnvironmentSetup::readEnvValue($targetEnv, 'APP_KEY');
+    if (! is_string($publishedKey) || ! str_starts_with($publishedKey, 'base64:')) {
+        fwrite(STDERR, "HOOK_UNEXPECTED_STATE\n");
+        return 2;
+    }
+    return 1;
+});
+fwrite(STDOUT, "PUBLISHED_KEY_PRESENT=" . (is_string($publishedKey) ? 'yes' : 'no') . "\n");
+exit($exit);
+PHP;
+
+        [$exitCode, $stdout, $stderr] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE'],
+            $script
+        );
+
+        expect($exitCode)->not->toBe(0)
+            ->and($stdout)->toContain('PUBLISHED_KEY_PRESENT=yes')
+            ->and($stdout)->not->toContain('CANARY_ROLLBACK_OK_9184')
+            ->and($stderr)->not->toContain('CANARY_ROLLBACK_OK_9184')
+            ->and($stderr)->toContain('original .env bytes were verified restored')
+            ->and(File::get($envPath))->toBe($originalEnv)
+            ->and(File::glob($tempDir.DIRECTORY_SEPARATOR.'.env.tmp.*'))->toBe([])
+            ->and(File::glob($tempDir.DIRECTORY_SEPARATOR.'.env.recovery.*'))->toBe([]);
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('denied rollback after post-publication failure never claims restoration and preserves recovery copy', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-rollback-denied-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+    $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+    $recoveryPaths = [];
+
+    try {
+        $originalEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nMAIL_PASSWORD=CANARY_ROLLBACK_DENIED_7310\nAPP_KEY=\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $originalEnv);
+
+        $script = <<<'PHP'
+require $argv[1];
+$exit = \App\Support\EnvironmentSetup::prepare($argv[2], function (string $base, string $targetEnv): int {
+    @chmod($targetEnv, 0444);
+    clearstatcache(true, $targetEnv);
+    if (is_writable($targetEnv)) {
+        return 99;
+    }
+    return 1;
+});
+exit($exit);
+PHP;
+
+        [$exitCode, $stdout, $stderr] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE'],
+            $script
+        );
+
+        if ($exitCode === 99 || str_contains($stderr, 'was verified restored')) {
+            // Restore writability before check; root/UID=0 containers ignore chmod 0444.
+            @chmod($envPath, 0666);
+            $this->markTestSkipped('Current OS privilege allows writes to chmod 0444 target file.');
+        }
+
+        $recoveryPaths = File::glob($tempDir.DIRECTORY_SEPARATOR.'.env.recovery.*');
+        $publishedAfter = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
+
+        expect($exitCode)->not->toBe(0)
+            ->and($stderr)->not->toContain('original .env bytes were verified restored')
+            ->and($stderr)->toContain('rollback failed')
+            ->and($stderr)->toContain('modified configuration remains on disk')
+            ->and($stderr)->toContain('Protected recovery copy')
+            ->and($stdout)->not->toContain('CANARY_ROLLBACK_DENIED_7310')
+            ->and($stderr)->not->toContain('CANARY_ROLLBACK_DENIED_7310')
+            ->and($publishedAfter)->toStartWith('base64:')
+            ->and($stdout)->not->toContain((string) $publishedAfter)
+            ->and($stderr)->not->toContain((string) $publishedAfter)
+            ->and(File::get($envPath))->not->toBe($originalEnv)
+            ->and($recoveryPaths)->toHaveCount(1)
+            ->and(basename($recoveryPaths[0]))->toMatch('/^\.env\.recovery\.[0-9a-f]{24}$/')
+            ->and(File::get($recoveryPaths[0]))->toBe($originalEnv);
+    } finally {
+        @chmod($envPath, 0666);
+        foreach ($recoveryPaths as $recoveryPath) {
+            @chmod($recoveryPath, 0666);
+        }
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('prepare rejects .env.testing override mismatch without modifying .env or .env.testing', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-env-testing-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        $testingPath = $tempDir.DIRECTORY_SEPARATOR.'.env.testing';
+        $validKeyA = 'base64:'.base64_encode(random_bytes(32));
+        $validKeyB = 'base64:'.base64_encode(random_bytes(32));
+
+        // Codex scenario: .env has APP_KEY=, .env.testing has a valid key, process has APP_ENV=testing.
+        $emptyEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nMAIL_PASSWORD=CANARY_TESTING_4401\nAPP_KEY=\nDB_CONNECTION=mysql\n";
+        $testingEnv = "APP_NAME=SitePulse\nAPP_ENV=testing\nAPP_KEY={$validKeyB}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $emptyEnv);
+        File::put($testingPath, $testingEnv);
+
+        [$exitEmpty, $outEmpty, $errEmpty] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'testing'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+
+        expect($exitEmpty)->not->toBe(0)
+            ->and(File::get($envPath))->toBe($emptyEnv)
+            ->and(File::get($testingPath))->toBe($testingEnv)
+            ->and($outEmpty.$errEmpty)->not->toContain('CANARY_TESTING_4401')
+            ->and($outEmpty.$errEmpty)->not->toContain($validKeyB);
+
+        // Existing valid key mismatch: .env has validKeyA while .env.testing overrides with validKeyB under APP_ENV=testing.
+        $validEnvA = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$validKeyA}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $validEnvA);
+
+        [$exitMismatch] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'testing'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        [$verifyMismatch] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'testing'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE'],
+            'require $argv[1]; exit(\App\Support\EnvironmentSetup::verifyApplicationEncryption($argv[2]));'
+        );
+
+        expect($exitMismatch)->not->toBe(0)
+            ->and($verifyMismatch)->not->toBe(0)
+            ->and(File::get($envPath))->toBe($validEnvA)
+            ->and(File::get($testingPath))->toBe($testingEnv);
+
+        // Unrelated variant file: under APP_ENV=local (no .env.local exists), .env updates cleanly while .env.testing stays untouched.
+        File::put($envPath, $emptyEnv);
+
+        [$exitLocal, $outLocal, $errLocal] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        $generated = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
+
+        expect($exitLocal)->toBe(0, $errLocal)
+            ->and($generated)->toStartWith('base64:')
+            ->and($generated)->not->toBe($validKeyB)
+            ->and(File::get($testingPath))->toBe($testingEnv)
+            ->and($outLocal)->toContain('Application key set successfully.');
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('prepare and verify neutralize inherited APP_KEY overrides and bind to target .env', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-inherited-key-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        $inheritedKey = 'base64:'.base64_encode(random_bytes(32));
+        $fileKey = 'base64:'.base64_encode(random_bytes(32));
+
+        // Invalid .env APP_KEY must fail even when parent process has a valid APP_KEY override.
+        $invalidEnv = "APP_NAME=SitePulse\nAPP_KEY=invalid-target-key\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $invalidEnv);
+
+        [$badPrep] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local', 'APP_KEY' => $inheritedKey]
+        );
+        [$badVerify] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local', 'APP_KEY' => $inheritedKey],
+            [],
+            'require $argv[1]; exit(\App\Support\EnvironmentSetup::verifyApplicationEncryption($argv[2]));'
+        );
+
+        expect($badPrep)->not->toBe(0)
+            ->and($badVerify)->not->toBe(0)
+            ->and(File::get($envPath))->toBe($invalidEnv);
+
+        // Existing valid .env key must be preserved and verified instead of overwritten or masked by inherited APP_KEY.
+        $validEnv = "APP_NAME=SitePulse\nAPP_KEY={$fileKey}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $validEnv);
+
+        [$validPrep, , $validErr] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local', 'APP_KEY' => $inheritedKey]
+        );
+        expect($validPrep)->toBe(0, $validErr)
+            ->and(File::get($envPath))->toBe($validEnv);
+
+        // Empty .env must generate a fresh key distinct from inherited APP_KEY and verify against Laravel cleanly.
+        File::put($envPath, "APP_NAME=SitePulse\nAPP_KEY=\nDB_CONNECTION=mysql\n");
+
+        [$emptyPrep, , $emptyErr] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local', 'APP_KEY' => $inheritedKey]
+        );
+        $createdKey = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
+
+        expect($emptyPrep)->toBe(0, $emptyErr)
+            ->and($createdKey)->toStartWith('base64:')
+            ->and($createdKey)->not->toBe($inheritedKey);
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('prepare rejects cached configuration whose valid key differs from .env key', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-cache-mismatch-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+        $cachedKey = 'base64:'.base64_encode(random_bytes(32));
+        $envKey = 'base64:'.base64_encode(random_bytes(32));
+
+        File::put($envPath, "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$cachedKey}\nDB_CONNECTION=sqlite\n");
+
+        [$cacheExit, $cacheOut, $cacheErr] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE'],
+            'require $argv[1]; passthru(PHP_BINARY . " " . escapeshellarg($argv[2] . DIRECTORY_SEPARATOR . "artisan") . " config:cache", $rc); exit($rc);'
+        );
+        expect($cacheExit)->toBe(0, $cacheOut.$cacheErr);
+
+        $cachedConfigPath = $tempDir.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'config.php';
+        $originalCachedConfig = File::get($cachedConfigPath);
+
+        // Replace .env with a different valid key so bootstrap/cache/config.php holds a mismatched valid key.
+        $mismatchedEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$envKey}\nDB_CONNECTION=sqlite\n";
+        File::put($envPath, $mismatchedEnv);
+
+        [$prepExit, $prepOut, $prepErr] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        [$verifyExit] = runPrepareWithEnvSubprocess(
+            $tempDir,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE'],
+            'require $argv[1]; exit(\App\Support\EnvironmentSetup::verifyApplicationEncryption($argv[2]));'
+        );
+
+        expect($prepExit)->not->toBe(0)
+            ->and($verifyExit)->not->toBe(0)
+            ->and($prepErr)->toContain('does not match')
+            ->and($prepOut.$prepErr)->not->toContain($cachedKey)
+            ->and($prepOut.$prepErr)->not->toContain($envKey)
+            ->and(File::get($envPath))->toBe($mismatchedEnv)
+            ->and(File::get($cachedConfigPath))->toBe($originalCachedConfig);
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('prepare rejects hard-linked, directory, and symlinked .env destinations safely', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-dest-safety-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+
+        // Directory at .env path.
+        File::ensureDirectoryExists($envPath);
+        [$dirExit] = runPrepareCapturingOutput($tempDir);
+        expect($dirExit)->not->toBe(0);
+        File::deleteDirectory($envPath);
+
+        // Hard-linked .env path.
+        $originalEnv = "APP_NAME=SitePulse\nAPP_KEY=\nDB_CONNECTION=mysql\n";
+        $hardLinkPath = $tempDir.DIRECTORY_SEPARATOR.'env.hardlink';
+        File::put($envPath, $originalEnv);
+        if (@link($envPath, $hardLinkPath)) {
+            [$hardExit] = runPrepareCapturingOutput($tempDir);
+            expect($hardExit)->not->toBe(0)
+                ->and(File::get($envPath))->toBe($originalEnv)
+                ->and(File::get($hardLinkPath))->toBe($originalEnv);
+            @unlink($hardLinkPath);
+        }
+        @unlink($envPath);
+
+        // Symlinked .env path (when host OS permits symlink creation).
+        $outsideTarget = $tempDir.DIRECTORY_SEPARATOR.'outside.secret';
+        File::put($outsideTarget, "APP_KEY=\n");
+        if (@symlink($outsideTarget, $envPath)) {
+            [$symExit] = runPrepareCapturingOutput($tempDir);
+            expect($symExit)->not->toBe(0)
+                ->and(is_link($envPath))->toBeTrue()
+                ->and(File::get($outsideTarget))->toBe("APP_KEY=\n");
+        }
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('createExclusiveTempEnvFile and createExclusiveRecoveryEnvFile create git-ignored files excluded from git add dry-run', function () {
     $gitDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-gitignore-'.bin2hex(random_bytes(8));
     expect(@mkdir($gitDir, 0755, true))->toBeTrue();
-    $tempPath = '';
+    $createdPaths = [];
 
     try {
         expect(@copy(base_path('.gitignore'), $gitDir.DIRECTORY_SEPARATOR.'.gitignore'))->toBeTrue();
@@ -539,37 +894,52 @@ test('createExclusiveTempEnvFile creates .env.tmp.<hex> files ignored by .gitign
         [$initExit, $initOut, $initErr] = $runGit($gitDir, ['init', '-q']);
         expect($initExit)->toBe(0, $initOut.$initErr);
 
-        $created = EnvironmentSetup::createExclusiveTempEnvFile($gitDir);
-        expect($created)->toBeArray()->toHaveCount(2);
+        $cases = [
+            ['factory' => fn () => EnvironmentSetup::createExclusiveTempEnvFile($gitDir), 'pattern' => '/^\.env\.tmp\.[0-9a-f]{24}$/'],
+            ['factory' => fn () => EnvironmentSetup::createExclusiveRecoveryEnvFile($gitDir), 'pattern' => '/^\.env\.recovery\.[0-9a-f]{24}$/'],
+        ];
 
-        [$tempPath, $handle] = $created;
-        expect(is_resource($handle))->toBeTrue()
-            ->and(dirname($tempPath))->toBe($gitDir);
+        $basenames = [];
+        foreach ($cases as $case) {
+            $created = $case['factory']();
+            expect($created)->toBeArray()->toHaveCount(2);
 
-        $basename = basename($tempPath);
-        expect($basename)->toMatch('/^\.env\.tmp\.[0-9a-f]{24}$/')
-            ->and($basename)->not->toMatch('/^\.en[0-9a-f]/i');
+            [$path, $handle] = $created;
+            $createdPaths[] = $path;
+            expect(is_resource($handle))->toBeTrue()
+                ->and(dirname($path))->toBe($gitDir);
 
-        expect(fwrite($handle, "APP_KEY=base64:TEMP_CANARY_9182\n"))->toBeInt();
-        expect(fclose($handle))->toBeTrue();
+            $basename = basename($path);
+            $basenames[] = $basename;
+            expect($basename)->toMatch($case['pattern'])
+                ->and($basename)->not->toMatch('/^\.en[0-9a-f]/i');
 
-        [$ignoreExit, $ignoreOut, $ignoreErr] = $runGit($gitDir, ['check-ignore', '-v', $basename]);
-        expect($ignoreExit)->toBe(0, $ignoreOut.$ignoreErr)
-            ->and($ignoreOut)->toContain('.env.*')
-            ->and($ignoreOut)->toContain($basename);
+            expect(fwrite($handle, "APP_KEY=base64:TEMP_CANARY_9182\n"))->toBeInt();
+            expect(fclose($handle))->toBeTrue();
 
-        [$repoIgnoreExit, $repoIgnoreOut, $repoIgnoreErr] = $runGit(base_path(), ['check-ignore', '-v', '--no-index', $basename]);
-        expect($repoIgnoreExit)->toBe(0, $repoIgnoreOut.$repoIgnoreErr)
-            ->and($repoIgnoreOut)->toContain('.env.*');
+            [$ignoreExit, $ignoreOut, $ignoreErr] = $runGit($gitDir, ['check-ignore', '-v', $basename]);
+            expect($ignoreExit)->toBe(0, $ignoreOut.$ignoreErr)
+                ->and($ignoreOut)->toContain('.env.*')
+                ->and($ignoreOut)->toContain($basename);
+
+            [$repoIgnoreExit, $repoIgnoreOut, $repoIgnoreErr] = $runGit(base_path(), ['check-ignore', '-v', '--no-index', $basename]);
+            expect($repoIgnoreExit)->toBe(0, $repoIgnoreOut.$repoIgnoreErr)
+                ->and($repoIgnoreOut)->toContain('.env.*');
+        }
 
         [$addDryExit, $addDryOut, $addDryErr] = $runGit($gitDir, ['add', '-n', '.']);
         expect($addDryExit)->toBe(0, $addDryOut.$addDryErr)
-            ->and($addDryOut)->toContain('.gitignore')
-            ->and($addDryOut)->not->toContain($basename)
-            ->and($addDryOut)->not->toContain('.env.tmp.');
+            ->and($addDryOut)->toContain('.gitignore');
+        foreach ($basenames as $basename) {
+            expect($addDryOut)->not->toContain($basename);
+        }
+        expect($addDryOut)->not->toContain('.env.tmp.')
+            ->and($addDryOut)->not->toContain('.env.recovery.');
     } finally {
-        if ($tempPath !== '' && is_file($tempPath)) {
-            @unlink($tempPath);
+        foreach ($createdPaths as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
         }
         File::deleteDirectory($gitDir);
     }

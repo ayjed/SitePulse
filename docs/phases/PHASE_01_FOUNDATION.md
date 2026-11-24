@@ -161,7 +161,7 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - Replaced hardcoded `'password'` in `database/factories/UserFactory.php` with `Hash::make(Str::random(32))` while preserving factory test ergonomics and explicit password overrides.
 - Created `app/Support/EnvironmentSetup.php` (`EnvironmentSetup::prepare()`) and updated `composer.json` `setup` and `post-create-project-cmd` scripts so:
   - `.env` is copied from `.env.example` only if missing.
-  - Existing valid `APP_KEY` values are detected and preserved across setup retries; when missing or empty, `EnvironmentSetup::prepare()` obtains a key candidate via `artisan key:generate --show --no-ansi`, stages `.env.tmp.<24-hex>` (`0600`, matching `.gitignore`'s `.env.*`), verifies staged encryption and checks for active `bootstrap/cache/config.php` (`APP_CONFIG_CACHE`) before atomically publishing `.env` with rollback protection on failure.
+  - Existing valid `APP_KEY` values are preserved and verified via SHA-256 key comparison against Laravel's loaded `encrypter->getKey()`; when missing or empty, `EnvironmentSetup::prepare()` verifies no conflicting `.env.<APP_ENV>` or config cache overrides `.env`, obtains a key candidate via `artisan key:generate --show --no-ansi`, stages `.env.tmp.<24-hex>` (`0600` on Unix; Windows relies on NTFS ACLs), verifies candidate encryption bound to the staged file before publishing `.env`, and verifies any post-publication rollback (preserving `.env.recovery.<24-hex>` if restoration is denied).
   - `database/database.sqlite` is created only when `DB_CONNECTION=sqlite` (excluding `:memory:` and MySQL).
 
 ### 5. Task 5 — Frontend Lockfile & Supported Node Versions
@@ -246,8 +246,26 @@ Following Codex's `NO-GO FOR MERGE` review on PR #1 (`https://github.com/ayjed/S
    - Failed setups when `bootstrap/cache/config.php` is cached leave both `.env` and `bootstrap/cache/config.php` byte-for-byte unchanged and clean up staged temporary files.
 
 2. **Git-ignored exclusive temporary `.env` creation on Windows & Unix (`app/Support/EnvironmentSetup.php`):**
-   - Replaced `tempnam()` (which on Windows truncates prefixes to `.enXXXX.tmp` outside `.gitignore`'s `.env.*` rule) with `createExclusiveTempEnvFile()`, opening `.env.tmp.<24-hex>` exclusively via `fopen(..., 'xb')` (`0600`).
+   - Replaced `tempnam()` (which on Windows truncates prefixes to `.enXXXX.tmp` outside `.gitignore`'s `.env.*` rule) with `createExclusiveTempEnvFile()`, opening `.env.tmp.<24-hex>` exclusively via `fopen(..., 'xb')` (`0600` on Unix-like systems; Windows relies on parent NTFS ACLs).
    - Cleaned up deterministically on failure in `finally`; any file abandoned by an abrupt interruption matches `.gitignore`'s `.env.*` rule. Verified with `git check-ignore -v` and `git add -n .` dry-run tests.
 
 3. **Zero-leakage MySQL 8.0 CI workflow (`.github/workflows/ci.yml`):**
    - Removed `services.mysql` and `CI_MYSQL_PASSWORD`; generated disposable `openssl rand -hex 24` root and `sitepulse_ci` passwords inside the `mysql-compatibility` job, registered `::add-mask::` before creating a `0600` `--env-file` (removed immediately and on `trap EXIT`), bound `mysql:8.0` to `127.0.0.1:33306:3306`, omitted `docker logs` dumps on cleanup (`docker rm -f`), and retained `permissions: contents: read` plus 40-char action SHA pins.
+   - Commit `2e44c397c55064d7c7195fd40073a1ff83ef1407` passed `pull_request` run `45510794534` and `push` run `45510786337` cleanly for MySQL logging, before Codex identified the two remaining `APP_KEY` correctness defects addressed in Task 07.
+
+### Task 07 — Final `APP_KEY` Correctness & Rollback Remediation (2026-11-25)
+
+Following Codex's `NO-GO` review on commit `2e44c397c55064d7c7195fd40073a1ff83ef1407`, simplified the `EnvironmentSetup` lifecycle and eliminated both remaining correctness defects:
+
+1. **Truthful verified rollback & protected recovery copy (`app/Support/EnvironmentSetup.php`):**
+   - Eliminated the redundant post-publication encryption verification subprocess on normal setup runs (full bound Laravel verification executes pre-publication on staged `.env.tmp.<24-hex>`).
+   - Updated post-publication rollback (`rollbackPublishedTarget()`) to explicitly verify disk bytes match original `.env` (or verified removal if newly seeded from `.env.example`) before reporting restoration; when rollback is denied or fails, setup returns nonzero, reports the remaining modified state accurately without leaking secrets, and saves an exclusive `.env.recovery.<24-hex>` copy (covered by `.gitignore`'s `.env.*` rule, falling back to system temp if the directory is unwritable).
+
+2. **Exact target `.env` binding & SHA-256 effective-key verification (`app/Support/EnvironmentSetup.php`):**
+   - Bound staged verification explicitly via `$app->loadEnvironmentFrom(...)` with inherited `APP_KEY`, `APP_PREVIOUS_KEYS`, `APP_CIPHER`, `APP_ENV`, and `APP_CONFIG_CACHE` neutralized, passing only SHA-256 key digests over STDIN to prove `$app->environmentFile()`, `config('app.cipher')`, `config('app.key')`, and `encrypter->getKey()` match the candidate key without printing secrets.
+   - Refused setup before modifying `.env` when `APP_ENV` resolves an existing environment variant (`.env.testing`, `.env.local`, etc.) or `bootstrap/cache/config.php` overrides `.env`, and verified existing `.env` keys match Laravel's effective loaded `encrypter->getKey()` under active variant/cached-config rules.
+
+3. **Filesystem safety & cross-platform permission accuracy:**
+   - Rejected symlinked destinations (`is_link()`), non-regular destination/source files (`lstat` mode `0100000`), and hard-linked destinations (`nlink > 1`) before reads, staging, publication, or rollback.
+   - Documented supported filesystem assumptions accurately: POSIX `0600` (or masked `0666`) mode bits apply on Unix-like systems, whereas Windows `chmod()` only toggles the DOS read-only bit and directory NTFS ACLs govern access; atomic same-directory rename is not guaranteed across unsupported filesystems or conflicting file locks.
+   - Expanded regression coverage to `38 passed (317 assertions)`.

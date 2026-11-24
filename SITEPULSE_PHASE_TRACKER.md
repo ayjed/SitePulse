@@ -5,7 +5,7 @@
 **Project status:** IN PROGRESS  
 **Approved by:** @ayjed  
 **Approval date:** 2026-11-23  
-**Last reviewed:** 2026-11-24  
+**Last reviewed:** 2026-11-25
 **Maintainer:** @ayjed  
 **Git tracking:** Branch `main` tracking `origin/main` (`https://github.com/ayjed/SitePulse.git`)
 
@@ -39,8 +39,9 @@
 - [x] Phase 01 remediation Task 6: Authored `.github/workflows/ci.yml` covering PHP `8.3` & `8.4`, extensions, `composer audit`, `npm ci` + `npm run build`, SQLite WAL migrations, Pint, Pest tests, and MySQL `8.0` compatibility.
 - [x] Phase 01 targeted remediation corrections: Dotenv/Encrypter `APP_KEY` verification, shell-free `proc_open()` array invocation (paths with spaces/`!`), SQLite `mkdir`/`touch` error propagation, SHA-pinned CI actions (`persist-credentials: false`), `config.platform.php` evaluation, `MAIL_TIMEOUT=5`, and aligned setup/SQLite documentation.
 - [x] Phase 01 final security corrections: Dotenv-aware top-level edit preserving multiline values (`APP_KEY=part-of-note`), atomic `.env` replacement, leak-free Dotenv errors with synthetic secret-canary verification, and MySQL CI non-root disposable user (`sitepulse_ci`) + loopback binding (`127.0.0.1:33306:3306`).
-- [x] PR #1 mandatory security corrections (`fix/phase-01-foundation-remediation`): Staged candidate encryption verification & `bootstrap/cache/config.php` pre-publish guard leaving `.env` byte-for-byte unchanged on failure, exclusive `.env.tmp.<24-hex>` temp creation matching `.gitignore` `.env.*` on Windows (`fopen(..., 'xb')`, replacing `tempnam()`), and `docker run --env-file` masked disposable MySQL CI without container credential log exposure.
-- [ ] PR #1 live CI log inspection and maintainer approval (`@ayjed`).
+- [x] PR #1 mandatory security corrections (`fix/phase-01-foundation-remediation`): Staged candidate encryption verification & `bootstrap/cache/config.php` pre-publish guard leaving `.env` byte-for-byte unchanged on failure, exclusive `.env.tmp.<24-hex>` temp creation matching `.gitignore` `.env.*` (`0600` on Unix / NTFS ACLs on Windows, replacing `tempnam()`), and `docker run --env-file` masked disposable MySQL CI without container credential log exposure.
+- [x] PR #1 final `APP_KEY` correctness & rollback remediation: Simplified single-stage `.env` lifecycle with SHA-256 effective-key verification (`encrypter->getKey()`), explicit target binding rejecting `.env.<APP_ENV>` / cached-config mismatches, verified rollback + `.env.recovery.<24-hex>` fallback on denied writes, destination symlink/hardlink rejection, and accurate Windows vs Unix permission guarantees.
+- [ ] PR #1 live CI verification on replacement commit and independent Codex / maintainer review (`@ayjed`).
 - [ ] Phase 01: Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`) after remediation sign-off.
 - [ ] Phase 01: Finalize Phase 01 completion evidence and request maintainer approval.
 
@@ -74,7 +75,8 @@
 | 2026-11-24 | 01 | Task 03 (Remediation on `fix/phase-01-foundation-remediation`): Diagnosed Smart App Control DLL block; restored PHP 8.3+ lockfile compatibility via Symfony 7.4 LTS; removed default account seeding & predictable factory password; made setup repeatable (`EnvironmentSetup`); added `package-lock.json` (`npm ci` + build); authored `.github/workflows/ci.yml` | `php vendor/bin/pest` (8 passing, 40 assertions), `php vendor/bin/pint --test`, `composer audit`, `npm run build` | In Progress |
 | 2026-11-24 | 01 | Task 04 (Targeted corrections on `fix/phase-01-foundation-remediation`): Dotenv/Encrypter `APP_KEY` validation & genuine Artisan tests, array-based `proc_open()`, SQLite error checks, SHA-pinned CI, `MAIL_TIMEOUT=5`, aligned docs & `README.md` | `php vendor/bin/pest` (22 passing, 134 assertions), `php vendor/bin/pint --test` (29 files), `composer validate --strict`, `composer audit` | In Progress |
 | 2026-11-24 | 01 | Task 05 (Final security corrections on `fix/phase-01-foundation-remediation`): Dotenv-aware top-level chunk editing (preserving multiline values), atomic `.env` writes, leak-free Dotenv errors + secret-canary tests, hardened `mysql-compatibility` CI | `php artisan test` (29 passing, 190 assertions), `php vendor/bin/pint --test` (29 files), `composer validate --strict`, `composer audit`, `npm ci && npm run build` | In Progress |
-| 2026-11-25 | 01 | Task 06 (PR #1 mandatory security corrections after Codex FAIL on `c67086960bf0ee28efb8b5508b093bb7d75db9f8`): Pre-publish staged verification + `bootstrap/cache/config.php` failure preservation, `.env.tmp.<24-hex>` exclusive temp files, `docker run --env-file` masked MySQL CI | `php artisan test` (32 passing, 231 assertions), `php vendor/bin/pint --test` (29 files), `composer validate --strict`, `composer audit`, `composer run setup` x2, `npm ci && npm run build`; prior CI `c670869` noted separately, new live CI pending | In Progress |
+| 2026-11-25 | 01 | Task 06 (PR #1 mandatory security corrections after Codex FAIL on `c67086960bf0ee28efb8b5508b093bb7d75db9f8`): Pre-publish staged verification + `bootstrap/cache/config.php` failure preservation, `.env.tmp.<24-hex>` exclusive temp files, `docker run --env-file` masked MySQL CI | `2e44c39` passed local `32` tests & GitHub Actions CI (`45510794534`, `45510786337`) cleanly for MySQL, but failed Codex audit on rollback reporting & `.env.testing` mismatch | In Progress |
+| 2026-11-25 | 01 | Task 07 (PR #1 final `APP_KEY` correctness & rollback remediation after Codex FAIL on `2e44c397c55064d7c7195fd40073a1ff83ef1407`): Simplified setup lifecycle, SHA-256 `encrypter->getKey()` matching against `.env`/`.env.<APP_ENV>`/cached config, verified rollback & `.env.recovery.<24-hex>` copy, symlink/hardlink checks, Unix vs Windows ACL docs | `php artisan test` (`38 passed, 317 assertions`), `php vendor/bin/pint --test` (`29 files`), `composer validate --strict`, `composer audit`, `verifyApplicationEncryption`, `composer run setup` x2, SQLite WAL `5000ms`, `npm ci && npm run build`; replacement CI pending | In Progress |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

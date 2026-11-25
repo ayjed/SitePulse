@@ -776,6 +776,40 @@ test('prepare and verify neutralize inherited APP_KEY overrides and bind to targ
     }
 });
 
+function runArtisanSubprocess(string $workspacePath, array $arguments, array $envOverrides = [], array $unsetVars = []): array
+{
+    $env = getenv();
+    if (! is_array($env)) {
+        $env = [];
+    }
+
+    foreach ($unsetVars as $name) {
+        unset($env[$name]);
+    }
+    foreach ($envOverrides as $name => $value) {
+        $env[$name] = $value;
+    }
+
+    $command = array_merge([PHP_BINARY, $workspacePath.DIRECTORY_SEPARATOR.'artisan'], $arguments);
+    $process = proc_open(
+        $command,
+        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+        $pipes,
+        $workspacePath,
+        $env
+    );
+
+    expect(is_resource($process))->toBeTrue();
+
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return [proc_close($process), $stdout, $stderr];
+}
+
 test('prepare rejects cached configuration whose valid key differs from .env key', function () {
     $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-cache-mismatch-'.bin2hex(random_bytes(8));
     createDisposableLaravelWorkspace($tempDir);
@@ -787,11 +821,11 @@ test('prepare rejects cached configuration whose valid key differs from .env key
 
         File::put($envPath, "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$cachedKey}\nDB_CONNECTION=sqlite\n");
 
-        [$cacheExit, $cacheOut, $cacheErr] = runPrepareWithEnvSubprocess(
+        [$cacheExit, $cacheOut, $cacheErr] = runArtisanSubprocess(
             $tempDir,
+            ['config:cache'],
             ['APP_ENV' => 'local'],
-            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE'],
-            'require $argv[1]; passthru(PHP_BINARY . " " . escapeshellarg($argv[2] . DIRECTORY_SEPARATOR . "artisan") . " config:cache", $rc); exit($rc);'
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE']
         );
         expect($cacheExit)->toBe(0, $cacheOut.$cacheErr);
 
@@ -821,6 +855,218 @@ test('prepare rejects cached configuration whose valid key differs from .env key
             ->and($prepOut.$prepErr)->not->toContain($envKey)
             ->and(File::get($envPath))->toBe($mismatchedEnv)
             ->and(File::get($cachedConfigPath))->toBe($originalCachedConfig);
+    } finally {
+        File::deleteDirectory($tempDir);
+    }
+});
+
+test('prepare detects custom APP_CONFIG_CACHE declared in .env across blank, matching, mismatched, and uncached states', function () {
+    $rootTemp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-custom-dotenv-cache-'.bin2hex(random_bytes(8));
+    $workspacePath = $rootTemp.DIRECTORY_SEPARATOR.'SitePulse ! Cache Dir';
+    createDisposableLaravelWorkspace($workspacePath);
+
+    try {
+        $envPath = $workspacePath.DIRECTORY_SEPARATOR.'.env';
+        $customRel = 'bootstrap/cache/audit-custom.php';
+        $customCachePath = $workspacePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'audit-custom.php';
+        $defaultCachePath = $workspacePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'config.php';
+        $keyOne = 'base64:'.base64_encode(random_bytes(32));
+        $keyTwo = 'base64:'.base64_encode(random_bytes(32));
+
+        // 1. No active cache on disk yet: blank APP_KEY generates cleanly and preserves APP_CONFIG_CACHE.
+        File::put($envPath, "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY=\nAPP_CONFIG_CACHE={$customRel}\nDB_CONNECTION=mysql\n");
+        [$freshExit, $freshOut, $freshErr] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        $generatedKey = EnvironmentSetup::readEnvValue($envPath, 'APP_KEY');
+        expect($freshExit)->toBe(0, $freshOut.$freshErr)
+            ->and($generatedKey)->toStartWith('base64:')
+            ->and(EnvironmentSetup::readEnvValue($envPath, 'APP_CONFIG_CACHE'))->toBe($customRel)
+            ->and(is_file($customCachePath))->toBeFalse();
+
+        // 2. Build custom cache via artisan config:cache using keyOne (confirm default config.php does not exist).
+        $cachedEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$keyOne}\nAPP_CONFIG_CACHE={$customRel}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $cachedEnv);
+        [$cacheExit, $cacheOut, $cacheErr] = runArtisanSubprocess(
+            $workspacePath,
+            ['config:cache'],
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE']
+        );
+        expect($cacheExit)->toBe(0, $cacheOut.$cacheErr)
+            ->and(is_file($customCachePath))->toBeTrue()
+            ->and(is_file($defaultCachePath))->toBeFalse();
+        $originalCacheBytes = File::get($customCachePath);
+
+        // 3. Matching valid APP_KEY in .env succeeds idempotently and preserves both files.
+        [$matchExit, $matchOut, $matchErr] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        expect($matchExit)->toBe(0, $matchOut.$matchErr)
+            ->and($matchOut)->toContain('preserving current key')
+            ->and(File::get($envPath))->toBe($cachedEnv)
+            ->and(File::get($customCachePath))->toBe($originalCacheBytes);
+
+        // 4. Codex reproduction: change .env to blank APP_KEY= while custom cache exists -> must fail closed and preserve both files.
+        $blankEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY=\nAPP_CONFIG_CACHE={$customRel}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $blankEnv);
+        [$blankExit, $blankOut, $blankErr] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        expect($blankExit)->not->toBe(0)
+            ->and($blankErr)->toContain('audit-custom.php')
+            ->and($blankOut.$blankErr)->not->toContain($keyOne)
+            ->and(File::get($envPath))->toBe($blankEnv)
+            ->and(File::get($customCachePath))->toBe($originalCacheBytes);
+
+        // 5. Mismatched valid keyTwo in .env while custom cache holds keyOne -> must fail closed and preserve both files.
+        $mismatchedEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$keyTwo}\nAPP_CONFIG_CACHE={$customRel}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $mismatchedEnv);
+        [$misExit, $misOut, $misErr] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+        );
+        [$verifyMisExit] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local'],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE'],
+            'require $argv[1]; exit(\App\Support\EnvironmentSetup::verifyApplicationEncryption($argv[2]));'
+        );
+        expect($misExit)->not->toBe(0)
+            ->and($verifyMisExit)->not->toBe(0)
+            ->and($misErr)->toContain('does not match')
+            ->and($misOut.$misErr)->not->toContain($keyOne)
+            ->and($misOut.$misErr)->not->toContain($keyTwo)
+            ->and(File::get($envPath))->toBe($mismatchedEnv)
+            ->and(File::get($customCachePath))->toBe($originalCacheBytes);
+    } finally {
+        File::deleteDirectory($rootTemp);
+    }
+});
+
+test('prepare detects custom APP_CONFIG_CACHE supplied via process environment across blank, matching, and mismatched states', function () {
+    $rootTemp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-custom-proc-cache-'.bin2hex(random_bytes(8));
+    $workspacePath = $rootTemp.DIRECTORY_SEPARATOR.'SitePulse ! Proc Cache';
+    createDisposableLaravelWorkspace($workspacePath);
+
+    try {
+        $envPath = $workspacePath.DIRECTORY_SEPARATOR.'.env';
+        $procRel = 'bootstrap/cache/proc-custom.php';
+        $procCachePath = $workspacePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'proc-custom.php';
+        $keyOne = 'base64:'.base64_encode(random_bytes(32));
+        $keyTwo = 'base64:'.base64_encode(random_bytes(32));
+
+        $validEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$keyOne}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $validEnv);
+
+        [$cacheExit, $cacheOut, $cacheErr] = runArtisanSubprocess(
+            $workspacePath,
+            ['config:cache'],
+            ['APP_ENV' => 'local', 'APP_CONFIG_CACHE' => $procRel],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE', 'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'DB_CONNECTION', 'DB_DATABASE']
+        );
+        expect($cacheExit)->toBe(0, $cacheOut.$cacheErr)
+            ->and(is_file($procCachePath))->toBeTrue();
+        $originalCacheBytes = File::get($procCachePath);
+
+        // Matching process cache succeeds and preserves both files.
+        [$matchExit, $matchOut, $matchErr] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local', 'APP_CONFIG_CACHE' => $procRel],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS']
+        );
+        expect($matchExit)->toBe(0, $matchOut.$matchErr)
+            ->and(File::get($envPath))->toBe($validEnv)
+            ->and(File::get($procCachePath))->toBe($originalCacheBytes);
+
+        // Blank APP_KEY= with existing process cache fails closed and preserves both files.
+        $blankEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY=\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $blankEnv);
+        [$blankExit, , $blankErr] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local', 'APP_CONFIG_CACHE' => $procRel],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS']
+        );
+        expect($blankExit)->not->toBe(0)
+            ->and($blankErr)->toContain('proc-custom.php')
+            ->and(File::get($envPath))->toBe($blankEnv)
+            ->and(File::get($procCachePath))->toBe($originalCacheBytes);
+
+        // Mismatched valid key in .env vs process cache fails closed and preserves both files.
+        $mismatchEnv = "APP_NAME=SitePulse\nAPP_ENV=local\nAPP_KEY={$keyTwo}\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $mismatchEnv);
+        [$misExit] = runPrepareWithEnvSubprocess(
+            $workspacePath,
+            ['APP_ENV' => 'local', 'APP_CONFIG_CACHE' => $procRel],
+            ['APP_KEY', 'APP_PREVIOUS_KEYS']
+        );
+        expect($misExit)->not->toBe(0)
+            ->and(File::get($envPath))->toBe($mismatchEnv)
+            ->and(File::get($procCachePath))->toBe($originalCacheBytes);
+    } finally {
+        File::deleteDirectory($rootTemp);
+    }
+});
+
+test('prepare fails closed on unsafe or ambiguous APP_CONFIG_CACHE paths', function () {
+    $tempDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'sitepulse-unsafe-cache-'.bin2hex(random_bytes(8));
+    createDisposableLaravelWorkspace($tempDir);
+
+    try {
+        $envPath = $tempDir.DIRECTORY_SEPARATOR.'.env';
+
+        foreach ([
+            'parent traversal' => "APP_NAME=SitePulse\nAPP_KEY=\nAPP_CONFIG_CACHE=../escape.php\n",
+            'stream wrapper' => "APP_NAME=SitePulse\nAPP_KEY=\nAPP_CONFIG_CACHE=phar://cache.phar\n",
+            'empty explicit path' => "APP_NAME=SitePulse\nAPP_KEY=\nAPP_CONFIG_CACHE=\"\"\n",
+        ] as $caseName => $template) {
+            File::put($envPath, $template);
+            [$exitCode] = runPrepareWithEnvSubprocess(
+                $tempDir,
+                ['APP_ENV' => 'local'],
+                ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+            );
+            expect($exitCode)->not->toBe(0, $caseName)
+                ->and(File::get($envPath))->toBe($template);
+        }
+
+        // Unsafe process-supplied cache values must fail closed across Windows and Unix.
+        $cleanEnv = "APP_NAME=SitePulse\nAPP_KEY=\nDB_CONNECTION=mysql\n";
+        File::put($envPath, $cleanEnv);
+        foreach (['whitespace only' => '   ', 'parent traversal' => '../proc-escape.php', 'stream wrapper' => 'phar://proc-cache.phar'] as $caseName => $badProcPath) {
+            [$procBadExit] = runPrepareWithEnvSubprocess(
+                $tempDir,
+                ['APP_ENV' => 'local', 'APP_CONFIG_CACHE' => $badProcPath],
+                ['APP_KEY', 'APP_PREVIOUS_KEYS']
+            );
+            expect($procBadExit)->not->toBe(0, $caseName)
+                ->and(File::get($envPath))->toBe($cleanEnv);
+        }
+
+        // Symlinked cache file must fail closed when host OS allows symlink creation.
+        $cacheDir = $tempDir.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache';
+        File::ensureDirectoryExists($cacheDir);
+        $realTarget = $tempDir.DIRECTORY_SEPARATOR.'outside-cache.php';
+        File::put($realTarget, "<?php return ['app' => ['key' => '']];\n");
+        $symCache = $cacheDir.DIRECTORY_SEPARATOR.'symlinked.php';
+        if (@symlink($realTarget, $symCache)) {
+            $symEnv = "APP_NAME=SitePulse\nAPP_KEY=\nAPP_CONFIG_CACHE=bootstrap/cache/symlinked.php\n";
+            File::put($envPath, $symEnv);
+            [$symExit] = runPrepareWithEnvSubprocess(
+                $tempDir,
+                ['APP_ENV' => 'local'],
+                ['APP_KEY', 'APP_PREVIOUS_KEYS', 'APP_CONFIG_CACHE']
+            );
+            expect($symExit)->not->toBe(0)
+                ->and(File::get($envPath))->toBe($symEnv);
+        }
     } finally {
         File::deleteDirectory($tempDir);
     }
@@ -922,9 +1168,11 @@ test('createExclusiveTempEnvFile and createExclusiveRecoveryEnvFile create git-i
                 ->and($ignoreOut)->toContain('.env.*')
                 ->and($ignoreOut)->toContain($basename);
 
-            [$repoIgnoreExit, $repoIgnoreOut, $repoIgnoreErr] = $runGit(base_path(), ['check-ignore', '-v', '--no-index', $basename]);
-            expect($repoIgnoreExit)->toBe(0, $repoIgnoreOut.$repoIgnoreErr)
-                ->and($repoIgnoreOut)->toContain('.env.*');
+            if (is_dir(base_path('.git'))) {
+                [$repoIgnoreExit, $repoIgnoreOut, $repoIgnoreErr] = $runGit(base_path(), ['check-ignore', '-v', '--no-index', $basename]);
+                expect($repoIgnoreExit)->toBe(0, $repoIgnoreOut.$repoIgnoreErr)
+                    ->and($repoIgnoreOut)->toContain('.env.*');
+            }
         }
 
         [$addDryExit, $addDryOut, $addDryErr] = $runGit($gitDir, ['add', '-n', '.']);

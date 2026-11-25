@@ -74,10 +74,37 @@ class EnvironmentSetup
         $cipher = self::resolveCipher($parsedEnv);
         $rawKey = $parsedEnv['APP_KEY'] ?? null;
         $needsNewKey = $rawKey === null || $rawKey === '';
+        $blockingVariant = self::resolveActiveEnvVariant($basePath);
+        $cacheInfo = self::inspectConfigurationCaches($basePath, $parsedEnv, $blockingVariant);
+
+        if ($cacheInfo === null) {
+            return 1;
+        }
 
         if (! $needsNewKey) {
             if (! self::isValidAppKey($rawKey, $cipher)) {
                 fwrite(STDERR, "Existing APP_KEY in .env is invalid for cipher {$cipher}; .env was left unchanged.\n");
+
+                return 1;
+            }
+
+            if ($cacheInfo['processPath'] !== null
+                && $cacheInfo['dotenvPath'] !== null
+                && $cacheInfo['processPath'] !== $cacheInfo['dotenvPath']
+                && $cacheInfo['existingPaths'] !== []) {
+                fwrite(
+                    STDERR,
+                    "Setup failed: conflicting configuration cache targets between process APP_CONFIG_CACHE and .env while cache files exist; .env and cached config were left unchanged.\n"
+                );
+
+                return 1;
+            }
+
+            if (count($cacheInfo['existingPaths']) > 1) {
+                fwrite(
+                    STDERR,
+                    "Setup failed: multiple configuration cache files exist; clear stale caches with `php artisan config:clear` and retry setup.\n"
+                );
 
                 return 1;
             }
@@ -127,7 +154,6 @@ class EnvironmentSetup
             return $createdCode;
         }
 
-        $blockingVariant = self::resolveActiveEnvVariant($basePath);
         if ($blockingVariant !== null) {
             $activeEnv = self::readProcessEnv('APP_ENV');
             fwrite(
@@ -138,11 +164,11 @@ class EnvironmentSetup
             return 1;
         }
 
-        $cachedConfigPath = self::resolveCachedConfigPath($basePath);
-        if (is_file($cachedConfigPath)) {
+        if ($cacheInfo['existingPaths'] !== []) {
+            $cacheList = implode(', ', $cacheInfo['existingPaths']);
             fwrite(
                 STDERR,
-                "Setup failed: Laravel configuration cache exists at {$cachedConfigPath} and overrides .env. Run `php artisan config:clear` and retry setup; .env and cached config were left unchanged.\n"
+                "Setup failed: Laravel configuration cache exists at {$cacheList} and overrides .env. Run `php artisan config:clear` and retry setup; .env and cached config were left unchanged.\n"
             );
 
             return 1;
@@ -347,6 +373,18 @@ class EnvironmentSetup
         $key = $parsed['APP_KEY'] ?? null;
         $cipher = self::resolveCipher($parsed);
         if (! is_string($key) || ! self::isValidAppKey($key, $cipher)) {
+            return 1;
+        }
+
+        $cacheInfo = self::inspectConfigurationCaches($basePath, $parsed, self::resolveActiveEnvVariant($basePath));
+        if ($cacheInfo === null || count($cacheInfo['existingPaths']) > 1) {
+            return 1;
+        }
+
+        if ($cacheInfo['processPath'] !== null
+            && $cacheInfo['dotenvPath'] !== null
+            && $cacheInfo['processPath'] !== $cacheInfo['dotenvPath']
+            && $cacheInfo['existingPaths'] !== []) {
             return 1;
         }
 
@@ -1135,14 +1173,210 @@ PHP;
         return is_file($variantPath) ? $variantName : null;
     }
 
-    private static function resolveCachedConfigPath(string $basePath): string
+    /**
+     * Validate and resolve all active configuration cache paths (default, process APP_CONFIG_CACHE,
+     * `.env` APP_CONFIG_CACHE, and active variant APP_CONFIG_CACHE). Fails closed on unsafe or ambiguous paths.
+     *
+     * @param  array<string, string|null>  $parsedEnv
+     * @return array{existingPaths: list<string>, processPath: ?string, dotenvPath: ?string}|null
+     */
+    private static function inspectConfigurationCaches(string $basePath, array $parsedEnv, ?string $variantName = null): ?array
     {
-        $envOverride = self::readProcessEnv('APP_CONFIG_CACHE');
-        if ($envOverride !== null) {
-            return self::resolvePath($envOverride, $basePath);
+        $defaultPath = $basePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'config.php';
+        if (! self::assertSafeCacheFileCandidate($defaultPath, 'bootstrap/cache/config.php')) {
+            return null;
         }
 
-        return $basePath.DIRECTORY_SEPARATOR.'bootstrap'.DIRECTORY_SEPARATOR.'cache'.DIRECTORY_SEPARATOR.'config.php';
+        $processRaw = self::readProcessEnvIncludingEmpty('APP_CONFIG_CACHE');
+        $processPath = null;
+        if ($processRaw !== null) {
+            $processPath = self::validateAndResolveCachePath($basePath, $processRaw, 'process APP_CONFIG_CACHE');
+            if ($processPath === null) {
+                return null;
+            }
+        }
+
+        $dotenvPath = self::resolveEnvFileCachePath($basePath, $parsedEnv, '.env');
+        if ($dotenvPath === false) {
+            return null;
+        }
+
+        $variantPath = null;
+        if ($variantName !== null) {
+            try {
+                $variantParsed = self::parseEnvFile($basePath.DIRECTORY_SEPARATOR.$variantName);
+            } catch (Throwable) {
+                fwrite(STDERR, "Setup failed: unable to parse active {$variantName} file.\n");
+
+                return null;
+            }
+
+            $variantPath = self::resolveEnvFileCachePath($basePath, $variantParsed, $variantName);
+            if ($variantPath === false) {
+                return null;
+            }
+        }
+
+        $candidates = [];
+        if ($processPath === null || $processPath === $defaultPath) {
+            $candidates[] = $defaultPath;
+        }
+
+        foreach ([$processPath, $dotenvPath, $variantPath] as $candidate) {
+            if (is_string($candidate) && ! in_array($candidate, $candidates, true)) {
+                $candidates[] = $candidate;
+            }
+        }
+
+        $existingPaths = [];
+        foreach ($candidates as $candidate) {
+            clearstatcache(true, $candidate);
+            if (is_file($candidate)) {
+                $existingPaths[] = $candidate;
+            }
+        }
+
+        return [
+            'existingPaths' => $existingPaths,
+            'processPath' => $processPath,
+            'dotenvPath' => $dotenvPath,
+        ];
+    }
+
+    /**
+     * @param  array<string, string|null>  $parsed
+     * @return string|false|null False indicates an invalid/unsafe cache declaration; null indicates unset.
+     */
+    private static function resolveEnvFileCachePath(string $basePath, array $parsed, string $sourceLabel): string|false|null
+    {
+        if (! array_key_exists('APP_CONFIG_CACHE', $parsed)) {
+            return null;
+        }
+
+        $normalized = self::normalizeDotenvScalar($parsed['APP_CONFIG_CACHE']);
+        if ($normalized === null) {
+            return null;
+        }
+
+        if (! is_string($normalized)) {
+            fwrite(STDERR, "Setup failed: APP_CONFIG_CACHE in {$sourceLabel} has an invalid non-string value.\n");
+
+            return false;
+        }
+
+        $resolved = self::validateAndResolveCachePath($basePath, $normalized, "{$sourceLabel} APP_CONFIG_CACHE");
+
+        return $resolved ?? false;
+    }
+
+    private static function normalizeDotenvScalar(?string $value): string|bool|null
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return match (strtolower($value)) {
+            'null', '(null)' => null,
+            'empty', '(empty)' => '',
+            'true', '(true)' => true,
+            'false', '(false)' => false,
+            default => $value,
+        };
+    }
+
+    /**
+     * Validate a configured APP_CONFIG_CACHE value against Laravel's path resolution rules
+     * and reject traversal, stream wrappers, symlinks, UNC paths, or non-regular cache targets.
+     */
+    private static function validateAndResolveCachePath(string $basePath, string $rawPath, string $label): ?string
+    {
+        if (trim($rawPath) === '') {
+            fwrite(STDERR, "Setup failed: {$label} must not be empty.\n");
+
+            return null;
+        }
+
+        if (str_contains($rawPath, "\0") || preg_match('/[\r\n]/', $rawPath) === 1) {
+            fwrite(STDERR, "Setup failed: {$label} contains invalid control characters.\n");
+
+            return null;
+        }
+
+        if (str_starts_with($rawPath, '\\\\') || str_starts_with($rawPath, '//')) {
+            fwrite(STDERR, "Setup failed: {$label} must not target a UNC network path.\n");
+
+            return null;
+        }
+
+        if (preg_match('/^[A-Za-z][A-Za-z0-9+.-]*:/', $rawPath) === 1) {
+            fwrite(STDERR, "Setup failed: {$label} contains an unsupported scheme or drive prefix.\n");
+
+            return null;
+        }
+
+        $segments = preg_split('/[\\\\\\/]/', $rawPath);
+        if ($segments === false || in_array('..', $segments, true)) {
+            fwrite(STDERR, "Setup failed: {$label} must not contain parent-directory traversal.\n");
+
+            return null;
+        }
+
+        $isLaravelAbsolute = str_starts_with($rawPath, '/') || str_starts_with($rawPath, '\\');
+        $resolved = $isLaravelAbsolute ? $rawPath : self::resolvePath($rawPath, $basePath);
+
+        if (! $isLaravelAbsolute) {
+            $baseReal = realpath($basePath);
+            $parentDir = dirname($resolved);
+            if ($baseReal !== false && is_dir($parentDir)) {
+                $parentReal = realpath($parentDir);
+                if ($parentReal === false || ($parentReal !== $baseReal && ! str_starts_with($parentReal.DIRECTORY_SEPARATOR, $baseReal.DIRECTORY_SEPARATOR))) {
+                    fwrite(STDERR, "Setup failed: relative {$label} resolves outside the application base directory.\n");
+
+                    return null;
+                }
+            }
+        }
+
+        return self::assertSafeCacheFileCandidate($resolved, $label) ? $resolved : null;
+    }
+
+    private static function assertSafeCacheFileCandidate(string $path, string $label): bool
+    {
+        clearstatcache(true, $path);
+
+        if (is_link($path)) {
+            fwrite(STDERR, "Setup failed: configuration cache {$label} must not be a symbolic link.\n");
+
+            return false;
+        }
+
+        if (! file_exists($path)) {
+            return true;
+        }
+
+        $stat = @lstat($path);
+        if (! is_array($stat) || (($stat['mode'] ?? 0) & 0170000) !== 0100000) {
+            fwrite(STDERR, "Setup failed: configuration cache {$label} is not a regular file.\n");
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function readProcessEnvIncludingEmpty(string $name): ?string
+    {
+        if (array_key_exists($name, $_ENV) && is_string($_ENV[$name])) {
+            return $_ENV[$name];
+        }
+
+        if (array_key_exists($name, $_SERVER) && is_string($_SERVER[$name])) {
+            return $_SERVER[$name];
+        }
+
+        $value = getenv($name);
+
+        return is_string($value) ? $value : null;
     }
 
     /**
@@ -1290,7 +1524,9 @@ PHP;
             return $path;
         }
 
-        return rtrim($basePath, '\\/').DIRECTORY_SEPARATOR.ltrim($path, '\\/');
+        $normalized = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, ltrim($path, '\\/'));
+
+        return rtrim($basePath, '\\/').DIRECTORY_SEPARATOR.$normalized;
     }
 
     /**

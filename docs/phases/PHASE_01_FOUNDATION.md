@@ -161,7 +161,7 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 - Replaced hardcoded `'password'` in `database/factories/UserFactory.php` with `Hash::make(Str::random(32))` while preserving factory test ergonomics and explicit password overrides.
 - Created `app/Support/EnvironmentSetup.php` (`EnvironmentSetup::prepare()`) and updated `composer.json` `setup` and `post-create-project-cmd` scripts so:
   - `.env` is copied from `.env.example` only if missing.
-  - Existing valid `APP_KEY` values are preserved and verified via SHA-256 key comparison against Laravel's loaded `encrypter->getKey()`; when missing or empty, `EnvironmentSetup::prepare()` verifies no conflicting `.env.<APP_ENV>` or config cache overrides `.env`, obtains a key candidate via `artisan key:generate --show --no-ansi`, stages `.env.tmp.<24-hex>` (`0600` on Unix; Windows relies on NTFS ACLs), verifies candidate encryption bound to the staged file before publishing `.env`, and verifies any post-publication rollback (preserving `.env.recovery.<24-hex>` if restoration is denied).
+  - Existing valid `APP_KEY` values are preserved and verified via SHA-256 key comparison against Laravel's loaded `encrypter->getKey()`; when missing or empty, `EnvironmentSetup::prepare()` verifies no conflicting `.env.<APP_ENV>` or active configuration cache (`bootstrap/cache/config.php`, process `APP_CONFIG_CACHE`, `.env` `APP_CONFIG_CACHE`, or active variant `APP_CONFIG_CACHE`) overrides `.env`, obtains a key candidate via `artisan key:generate --show --no-ansi`, stages `.env.tmp.<24-hex>` (`0600` on Unix; Windows relies on NTFS ACLs), verifies candidate encryption bound to the staged file before publishing `.env`, and verifies any post-publication rollback (preserving `.env.recovery.<24-hex>` if restoration is denied). Note setup fails closed rather than clearing arbitrary cached configuration automatically.
   - `database/database.sqlite` is created only when `DB_CONNECTION=sqlite` (excluding `:memory:` and MySQL).
 
 ### 5. Task 5 — Frontend Lockfile & Supported Node Versions
@@ -268,4 +268,18 @@ Following Codex's `NO-GO` review on commit `2e44c397c55064d7c7195fd40073a1ff83ef
 3. **Filesystem safety & cross-platform permission accuracy:**
    - Rejected symlinked destinations (`is_link()`), non-regular destination/source files (`lstat` mode `0100000`), and hard-linked destinations (`nlink > 1`) before reads, staging, publication, or rollback.
    - Documented supported filesystem assumptions accurately: POSIX `0600` (or masked `0666`) mode bits apply on Unix-like systems, whereas Windows `chmod()` only toggles the DOS read-only bit and directory NTFS ACLs govern access; atomic same-directory rename is not guaranteed across unsupported filesystems or conflicting file locks.
-   - Expanded regression coverage to `38 passed (317 assertions)`.
+   - Expanded regression coverage to `38 passed (317 assertions)` locally and `38 passed (320 assertions)` across GitHub Actions runs `45514246143` (`pull_request`) and `45514235856` (`push`) on commit `1feac7eefba4eec82e6cc821f4e95d5c271f7d0a`.
+
+### Task 08 — Custom Configuration Cache Verification Remediation (2026-11-25)
+
+Following Codex's `FAIL` audit on commit `1feac7eefba4eec82e6cc821f4e95d5c271f7d0a` (`pull_request` run `45514246143` / `push` run `45514235856` passed `38 passed (320 assertions)`, while Codex reproduced `.env`-declared `APP_CONFIG_CACHE=bootstrap/cache/audit-custom.php` bypassing `bootstrap/cache/config.php` detection):
+
+1. **Root cause:**
+   - In Laravel 13, `LoadEnvironmentVariables` initially checks `APP_CONFIG_CACHE` before `.env` loads, then loads `.env`, and `LoadConfiguration` subsequently calls `$app->getCachedConfigPath()` (`normalizeCachePath('APP_CONFIG_CACHE', 'cache/config.php')`), loading a custom cache path declared inside `.env`. Previously `resolveCachedConfigPath()` only inspected process `APP_CONFIG_CACHE` and `bootstrap/cache/config.php`, missing `.env`-declared custom cache files.
+2. **Fail-closed cache detection & path validation (`app/Support/EnvironmentSetup.php`):**
+   - Added `inspectConfigurationCaches()`, `resolveEnvFileCachePath()`, `validateAndResolveCachePath()`, and `assertSafeCacheFileCandidate()` checking process `APP_CONFIG_CACHE` (including explicit empty values), `.env` `APP_CONFIG_CACHE`, active `.env.<APP_ENV>` `APP_CONFIG_CACHE`, and default `bootstrap/cache/config.php` against Laravel's path resolution rules.
+   - Fails closed before touching `.env` or any cache when any path is empty/whitespace/non-string, uses stream wrappers (`phar://`, etc.) or UNC/drive prefixes, traverses outside `$basePath` via `..` or symlinks, is a non-regular file/symlink, or conflicts across cache targets.
+   - Refuses setup cleanly without modifying `.env` or deleting/overwriting existing caches when generating a new `APP_KEY` while an active cache exists, or when an existing valid `.env` key differs from Laravel's effective loaded `encrypter->getKey()`.
+   - Setup does not attempt to operate safely by mutating keys under un-cleared arbitrary cached configuration; operators must run `php artisan config:clear` before rotating or initializing an empty `APP_KEY`.
+3. **Regression coverage:**
+   - Verified locally (`41 passed (380 assertions)`, Pint `29 files`) including custom `.env` cache paths, process env cache paths, uncached generation with `APP_CONFIG_CACHE` set, matching/mismatched cache keys, unsafe/traversal/symlinked cache paths, and paths containing spaces and `!`.

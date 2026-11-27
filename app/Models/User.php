@@ -18,14 +18,6 @@ class User extends Authenticatable
     use HasFactory, Notifiable;
 
     /**
-     * Determine whether this account is the authorized single site owner.
-     */
-    public function isOwner(): bool
-    {
-        return (bool) $this->is_owner;
-    }
-
-    /**
      * Get the attributes that should be cast.
      *
      * @return array<string, string>
@@ -35,8 +27,6 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            'is_owner' => 'boolean',
-            'owner_slot' => 'integer',
         ];
     }
 }

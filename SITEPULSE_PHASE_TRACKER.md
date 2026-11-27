@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 01 — Foundation and local development  
+**Current phase:** 02 — HTTP monitor engine and persistence  
 **Project status:** IN PROGRESS  
-**Approved by:** @ayjed  
-**Approval date:** 2026-11-23  
+**Approved by:** @ayjed (Phase 01 approved 2026-11-27)  
+**Approval date:** 2026-11-27  
 **Last reviewed:** 2026-11-27
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `main` tracking `origin/main` (`https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `feat/phase-02-safe-http-client` (from `main` `12dbd17`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -20,8 +20,8 @@
 | Phase | Objective | Status | Exit criteria |
 |---|---|---|---|
 | 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
-| 01 | Foundation and local development | IN PROGRESS | clean scaffold, reproducible setup, tests/CI running |
-| 02 | HTTP monitor engine and persistence | NOT STARTED | scheduled checks, history, security tests |
+| 01 | Foundation and local development | APPROVED | clean scaffold, reproducible setup, tests/CI running |
+| 02 | HTTP monitor engine and persistence | IN PROGRESS | scheduled checks, history, security tests |
 | 03 | Accessible dashboard | NOT STARTED | responsive monitoring UI and E2E smoke check |
 | 04 | Alerts, TLS checks, hardening | NOT STARTED | alert deduplication, SSL checks, negative security tests |
 | 05 | Packaging, documentation, public release | NOT STARTED | install verified, license/docs/demo/release checks |
@@ -45,8 +45,8 @@
 - [x] PR #1 live CI verification on `1603b15` (`pull_request` run `45518735867` & `push` run `45518727520`: all 6 jobs passed across `PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, and `PHP 8.3 / MySQL 8.0` with `41` tests / `386` assertions per job), followed by Symfony 7.4 LTS advisory updates (`c615775`; CI `46041927707` / `46041923653`) and PR #1 merge into `main` at `d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b` (`46042368731` passed).
 - [x] Phase 01 Task 10 recovery & retrospective security review completed on `feat/phase-01-owner-authentication-reviewed` (`f1e4886`; CI runs `46051330107` & `46051323625`: all 6 jobs passed with `65` tests / `592` assertions per job) and merged via PR #2 (`https://github.com/ayjed/SitePulse/pull/2`) into `main` at `776333f2320ca52c7d2f7255305fc100f818a9b3` (post-merge CI `46053500009` passed).
 - [x] Phase 01 branch protection enabled on `main` via GitHub Repository Ruleset `#28256290` (`Protect SitePulse Main`, `enforcement: active`).
-- [x] Phase 01 final acceptance audit completed on `audit/phase-01-final-acceptance` (full local + CI verification passing; zero tracked secrets; SQLite WAL verified).
-- [ ] Phase 01: Finalize acceptance evidence PR review and receive explicit maintainer (`@ayjed`) approval before marking Phase 01 `APPROVED` or beginning Phase 02.
+- [x] Phase 01 final acceptance audit completed on `audit/phase-01-final-acceptance`, merged via PR #3 (`https://github.com/ayjed/SitePulse/pull/3`) into `main` at `12dbd17a949cd0764ab64cae335fcb9511f70ed1` (`2026-11-27T19:14:15Z`), and explicitly **APPROVED** by maintainer (`@ayjed`) on `2026-11-27`.
+- [x] Phase 02 Task 12 (`feat/phase-02-safe-http-client`): Implemented modular `SafeHttpClient` SSRF foundation (`CanonicalUrlValidator`, `IpAddressPolicy`, `NativeDnsResolver`, `CurlHttpTransport`, `BoundedBodyBuffer`, `BlockedDestinationException`), disallowed caller-supplied custom request headers & cross-origin cookie/auth leakage, hardened IPv6 reserved CIDRs + millisecond redirect budgets + header/URL/error sanitization, and verified `SEC-01`–`SEC-16` plus regression tests (`159 passed, 373 assertions`; full suite `224 passed, 959 assertions`); Draft PR #4 pending independent review & CI verification (`Phase 02 remains IN PROGRESS`).
 
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
@@ -83,7 +83,9 @@
 | 2026-11-25 | 01 | Task 08 (PR #1 custom `APP_CONFIG_CACHE` remediation after Codex FAIL on `1feac7eefba4eec82e6cc821f4e95d5c271f7d0a`): Fail-closed cache path validation & resolution across process env, `.env`, active variants, and default `bootstrap/cache/config.php`, preserving `.env` & caches unchanged | Local checks PASS (`41 passed, 380 assertions`, Pint `29 files`, `composer validate --strict`, `composer audit`, `verifyApplicationEncryption`, `composer run setup` x2, `npm ci && npm run build`, independent custom-cache check); CI commit `1603b15` verified in `45518735867` (PR, 3/3 passed) & `45518727520` (push, 3/3 passed): `PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, and `PHP 8.3 / MySQL 8.0` all passed (`41 tests, 386 assertions` per job) | In Progress |
 | 2026-11-27 | 01 | Task 09 (PR #1 completion & merge): Documentation sync (`d4aaf37`) hit newly published Symfony advisories on CI (`46026063547`, `46026055330`), resolved in `c615775` via Symfony `v7.4.24`/`v7.4.25` updates (`46041927707`, `46041923653`), and merged cleanly into `main` at `d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b` | `https://github.com/ayjed/SitePulse/pull/1`, `46042368731` PASS (`41 passed, 386 assertions` across `PHP 8.3`, `PHP 8.4`, `MySQL 8.0`) | Merged (PR #1) |
 | 2026-11-27 | 01 | Task 10 (Retrospective recovery & owner-auth PR #2 merged into `main`): Recovered `08b0212` cleanly via `backup/task10-08b0212` onto `feat/phase-01-owner-authentication-reviewed` (`f1e4886`), fixed malformed-input rate-limit bypass, array `old('email')` HTTP 500, empty `SESSION_SECURE_COOKIE=` fallback, CLI echo-exception handling, bounded STDIN/NUL-byte validation, and login footer disclosure; merged PR #2 (`https://github.com/ayjed/SitePulse/pull/2`) into `main` at `776333f2320ca52c7d2f7255305fc100f818a9b3` | PR #2 CI `46051330107` & `46051323625` (6/6 PASS, `65 passed, 592 assertions` per job), post-merge `main` CI `46053500009` (3/3 PASS) | Merged (PR #2) |
-| 2026-11-27 | 01 | Task 11 (Phase 01 final acceptance audit on `audit/phase-01-final-acceptance`): Verified PR #1 (`d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b`) & PR #2 (`776333f2320ca52c7d2f7255305fc100f818a9b3`) merged, active GitHub ruleset `#28256290` (`Protect SitePulse Main`) on `main`, zero tracked secrets, SQLite WAL (`5000ms`), and full local + CI test suites | `composer validate --strict`, `composer audit --locked`, `composer check-platform-reqs --lock` (`0` packages excluding PHP 8.3), `pint --test` (`38 files`), `php artisan test` (`65 passed, 586 assertions`), `npm ci && npm run build`, SQLite `journal=wal, busy_timeout=5000, users=0` | In Review (Awaiting `@ayjed` Phase 01 Approval) |
+| 2026-11-27 | 01 | Task 11 (Phase 01 final acceptance audit on `audit/phase-01-final-acceptance`): Verified PR #1 (`d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b`) & PR #2 (`776333f2320ca52c7d2f7255305fc100f818a9b3`) merged, active GitHub ruleset `#28256290` (`Protect SitePulse Main`) on `main`, zero tracked secrets, SQLite WAL (`5000ms`), and full local + CI test suites | `composer validate --strict`, `composer audit --locked`, `composer check-platform-reqs --lock` (`0` packages excluding PHP 8.3), `pint --test` (`38 files`), `php artisan test` (`65 passed, 586 assertions`), `npm ci && npm run build`, SQLite `journal=wal, busy_timeout=5000, users=0` | Merged via PR #3 (`12dbd17a949cd0764ab64cae335fcb9511f70ed1`); Phase 01 APPROVED by `@ayjed` (`2026-11-27`) |
+| 2026-11-27 | 02 | Task 12 (`feat/phase-02-safe-http-client`, `9d0a382`): Implemented `SafeHttpClient` foundation + deterministic `SEC-01`–`SEC-16` security suite; rejected in independent security review (NO-GO on Finding 1 custom headers/redirect forwarding) | CI `46058197673` & `46058189589` (`207 passed, 887 assertions` across `PHP 8.3`/`8.4`/`MySQL 8.0`), local `142 passed, 295 assertions` Security suite | NO-GO (PR #4 Remediation Required) |
+| 2026-11-27 | 02 | Task 12 Security Review Remediation (`feat/phase-02-safe-http-client`): Disallowed caller-supplied custom headers (`SafeHttpClient`, `TransportRequest`, `CurlHttpTransport`) & User-Agent injection, enforced fail-closed transport `pinnedIp` + no-reuse/no-DNS-cache/IPv4-IPv6 family pinning + `CURLOPT_UNRESTRICTED_AUTH=false`, added RFC IPv6 tunneling/NAT64/SIIT/6to4/Teredo/Site-Local CIDRs, added `2048`-byte URL cap & authority allowlist & redirect backslash blocks, enforced `256`-line/`64 KB` header caps + millisecond redirect deadlines + credential redaction in failure reports | `pint --test` (`56 files`), `pest --testsuite=Security` (`159 passed, 373 assertions`), `php artisan test` (`224 passed, 959 assertions`), `composer validate --strict`, `composer audit --locked` (`0` advisories), `npm run build`, `git diff --check` | Draft PR #4 Pending Independent Review & CI (`Phase 02 IN PROGRESS`) |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

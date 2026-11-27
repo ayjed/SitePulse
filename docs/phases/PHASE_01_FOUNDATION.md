@@ -14,14 +14,15 @@
 - [x] Configure SQLite WAL mode (5000ms busy timeout) and execute baseline migrations.
 - [x] Verify framework boot and pass initial automated tests (`php artisan test`).
 - [x] Remediate PHP 8.3+ lockfile compatibility, unsafe seeding, repeatable setup (`APP_KEY` preservation), and `package-lock.json` (`npm ci` + build).
-- [x] Set up automated formatting checks (`pint`) and GitHub Actions CI workflow (`.github/workflows/ci.yml`; remote run pending push).
-- [ ] Build initial owner authentication and CLI provisioner (`sitepulse:create-owner`, deferred until Codex remediation review).
+- [x] Set up automated formatting checks (`pint`) and GitHub Actions CI workflow (`.github/workflows/ci.yml`).
+- [x] Implement initial single-owner authentication and CLI provisioner (`sitepulse:create-owner`) on review branch (`feat/phase-01-owner-authentication-reviewed`, independent security review pending).
 - [x] Document installation and startup commands (`README.md`, `docs/HOSTING_REQUIREMENTS.md`).
 
 ## Exit criteria
 - [x] Clean install works with documented tool versions locally (PHP 8.4.28 host / WSL or Linux CI needed on Windows Smart App Control sandboxes).
-- [ ] CI passes on a fresh checkout (`.github/workflows/ci.yml` authored; awaiting GitHub Actions execution after branch push).
+- [x] CI passes on a fresh checkout (`.github/workflows/ci.yml` verified green on PR #1 merge `d3d7ffc` and `08b0212`; review-PR CI check pending push).
 - [x] No credentials or predictable seeded login accounts included in repository.
+- [ ] Independent security review of owner-authentication draft PR completed.
 - [ ] Maintainer approves evidence and review.
 
 ---
@@ -191,10 +192,10 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 | `MAIL_TIMEOUT` | `5` (`config/mail.php` default `5`) | `<= 5` seconds (per ADR-0004) | Slow SMTP socket stalls cron/check loop |
 
 ### 7. Outstanding Phase 01 Acceptance Criteria
-- [ ] Remote GitHub Actions execution of `.github/workflows/ci.yml` verifying PHP `8.3`, PHP `8.4`, SQLite WAL, and MySQL `8.0` migrations on Linux runners.
-- [ ] Codex independent re-review of remediation branch `fix/phase-01-foundation-remediation`.
-- [ ] Owner authentication migration and `sitepulse:create-owner` CLI command (held until remediation review).
-- [ ] Maintainer `@ayjed` explicit review and approval of Phase 01.
+- [x] Remote GitHub Actions execution of `.github/workflows/ci.yml` verifying PHP `8.3`, PHP `8.4`, SQLite WAL, and MySQL `8.0` migrations on Linux runners (verified on PR #1 merge `d3d7ffc` and baseline `08b0212`).
+- [x] Codex independent re-review & merge of PR #1 (`d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b` merged after Symfony 7.4 LTS patch `c615775`).
+- [ ] Independent security review and merge of the Task 10 owner-authentication draft PR (`feat/phase-01-owner-authentication-reviewed`).
+- [ ] Maintainer `@ayjed` explicit review and approval of Phase 01 (`IN PROGRESS`).
 
 ---
 
@@ -283,3 +284,28 @@ Following Codex's `FAIL` audit on commit `1feac7eefba4eec82e6cc821f4e95d5c271f7d
    - Setup does not attempt to operate safely by mutating keys under un-cleared arbitrary cached configuration; operators must run `php artisan config:clear` before rotating or initializing an empty `APP_KEY`.
 3. **Regression coverage:**
    - Verified locally (`41 passed (380 assertions)`, Pint `29 files`) including custom `.env` cache paths, process env cache paths, uncached generation with `APP_CONFIG_CACHE` set, matching/mismatched cache keys, unsafe/traversal/symlinked cache paths, and paths containing spaces and `!`.
+
+---
+
+## Task 09 — PR #1 Advisory Remediation & Merge (2026-11-27)
+
+- Following clean independent review on `1603b15abb028a0092385b33efb070adb8932da1`, CI on doc-sync commit `d4aaf37c20561e93364c52673af3973c4730e0c2` failed `composer audit --no-interaction` on 5 newly reported Symfony advisories (`CVE-2026-133743`, `CVE-2026-133751`, `CVE-2026-133755`, `CVE-2026-133746`, `CVE-2026-133754`) and stopped before merging.
+- PR #1 patched `symfony/http-kernel` (`v7.4.25`), `symfony/mailer` (`v7.4.24`), and `symfony/routing` (`v7.4.24`) in commit `c6157758d494bfd23f0129fde26e4a3693c982bf` (GitHub Actions runs `46041927707` and `46041923653` passed all jobs) and merged into `main` at `d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b` (`46042368731` passed).
+
+---
+
+## Task 10 — Single-Owner Authentication Recovery & Retrospective Security Review (2026-11-27)
+
+1. **History & Non-Destructive Recovery:**
+   - Owner-authentication commit `08b0212637a291adebffa00b46b1d441109950d9` (`20` files) was inadvertently pushed directly to `origin/main` because branch tracking on `feat/phase-01-owner-authentication` pointed to `refs/heads/main`.
+   - `08b0212` passed its GitHub Actions matrix (`46044416132`: `PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, and `PHP 8.3 / MySQL 8.0 Compatibility`, `63 passed (555 assertions)`), and was subsequently superseded on `main` by `5b1162b8c6465607b1495df3a82e794f0804c035`.
+   - Without force-pushing, resetting, or rewriting `main`, `08b0212` was preserved under tag `backup/task10-08b0212` and re-applied cleanly onto `feat/phase-01-owner-authentication-reviewed` (created `--no-track` from `origin/main` at `5b1162b`) for retrospective draft-PR review. Phase 01 remains `IN PROGRESS` and independent security review remains pending until maintainer review completes.
+2. **Owner Provisioning & Authentication Architecture:**
+   - Added `is_owner` (boolean default `false`) and nullable unique `owner_slot` (`unsignedTinyInteger`) to `users` (`2026_11_27_000001_add_owner_columns_to_users_table.php`), enforcing single-owner creation at the database constraint level alongside transactional `lockForUpdate()` in `App\Support\OwnerProvisioner`. `User::isOwner()` + mass-assignment exclusions prevent privilege injection.
+   - `php artisan sitepulse:create-owner` (`CreateOwnerCommand`) runs in console only, uses non-echoed masked prompts (`$this->secret(..., false)`) or `--password-stdin` (no `--password` CLI flag), requires >= 12 characters with upper/lower/digit/symbol complexity (<= 72 bytes for `bcrypt` at `BCRYPT_ROUNDS=12`, NUL bytes rejected), and suppresses raw exception/credential details in output and logs.
+   - `AuthenticatedSessionController` provides `GET/POST /login` (`guest` middleware) and `POST /logout` (`auth` middleware), using `Auth::attemptWhen(..., fn (User $user) => $user->isOwner(), false)`, session ID regeneration on login, session invalidation + CSRF token rotation on logout, generic error responses, `RateLimiter` throttling (5 attempts/min/IP), and `ApplySecurityHeaders` (`X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, CSP, and `Cache-Control: no-store`). No public registration routes exist, and `GET /dashboard` enforces `auth` + `can:access-dashboard`.
+3. **Retrospective Independent Security Review Findings & Fixes:**
+   - **Rate-limit bypass & `email[]` array 500 error (`AuthenticatedSessionController`, `login.blade.php`):** Previously `$request->validate()` ran before `RateLimiter::hit()`, allowing malformed/empty/oversized POST payloads to bypass the 5/min throttle, and flashing non-string `email[]` arrays into `_old_input` caused `e(old('email'))` to throw `TypeError` (HTTP 500) on `GET /login`. Fixed via manual `Validator::make()`, uniform `RateLimiter::hit()` + generic `422`/redirect responses for all failed/malformed inputs, string normalization for `_old_input['email']`, and type-safe `is_string()` fallback in `login.blade.php`.
+   - **Empty `SESSION_SECURE_COOKIE=` silent fallback (`config/session.php`):** Previously `env('SESSION_SECURE_COOKIE') ?? (...)` treated empty string `''` from `.env` as falsy instead of falling back to `APP_ENV === 'production'` or `https://` `APP_URL`. Replaced with explicit boolean/string parsing and `filter_var` fallback verified under `config:cache`.
+   - **CLI interactive-echo error handling, bounded STDIN & NUL-byte password guard (`CreateOwnerCommand`, `OwnerProvisioner`):** Wrapped interactive prompts in exception-safe handling, bounded `--password-stdin` reads (`8192`-byte limit without silent truncation), and rejected `\0` bytes in `OwnerProvisioner::passwordRules()`.
+   - **Public `/login` CLI command disclosure (`login.blade.php`):** Removed the internal `php artisan sitepulse:create-owner` command hint from the unauthenticated `/login` footer.

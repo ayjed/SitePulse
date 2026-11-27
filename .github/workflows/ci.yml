@@ -1,0 +1,299 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'fix/**'
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php-version }} / SQLite
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.3', '8.4']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, mbstring, openssl, pdo_mysql, pdo_sqlite, session, tokenizer, xml, zip
+          tools: composer:v2
+          coverage: none
+
+      - name: Verify PHP version and required extensions
+        run: |
+          php -v
+          php -r '
+            $required = ["bcmath", "ctype", "curl", "dom", "fileinfo", "filter", "mbstring", "openssl", "pdo_mysql", "pdo_sqlite", "session", "tokenizer", "xml", "zip"];
+            $missing = array_filter($required, static fn (string $ext): bool => ! extension_loaded($ext));
+            if ($missing !== []) {
+                fwrite(STDERR, "Missing required extensions: " . implode(", ", $missing) . PHP_EOL);
+                exit(1);
+            }
+            echo "All required extensions loaded (" . count($required) . ")." . PHP_EOL;
+          '
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php-${{ matrix.php-version }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-${{ matrix.php-version }}-composer-
+
+      - name: Validate composer.json and composer.lock
+        run: composer validate --strict --no-interaction
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Audit Composer dependencies for security advisories
+        run: composer audit --no-interaction
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install frontend dependencies cleanly
+        run: npm ci --no-fund
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Prepare environment and verify idempotent APP_KEY generation
+        run: |
+          php -r 'require "vendor/autoload.php"; exit(\App\Support\EnvironmentSetup::prepare(getcwd() ?: "."));'
+          php -r '
+            require "vendor/autoload.php";
+            $envPath = getcwd() . DIRECTORY_SEPARATOR . ".env";
+            $initialKey = \App\Support\EnvironmentSetup::readEnvValue($envPath, "APP_KEY");
+            if (! is_string($initialKey) || $initialKey === "") {
+                fwrite(STDERR, "APP_KEY was not generated." . PHP_EOL);
+                exit(1);
+            }
+            $initialHash = hash("sha256", $initialKey);
+            $retryStatus = \App\Support\EnvironmentSetup::prepare(getcwd() ?: ".");
+            if ($retryStatus !== 0) {
+                fwrite(STDERR, "Retry setup failed." . PHP_EOL);
+                exit($retryStatus);
+            }
+            $retryKey = \App\Support\EnvironmentSetup::readEnvValue($envPath, "APP_KEY");
+            if (! is_string($retryKey) || ! hash_equals($initialHash, hash("sha256", $retryKey))) {
+                fwrite(STDERR, "APP_KEY changed on retry!" . PHP_EOL);
+                exit(1);
+            }
+            echo "Idempotent setup and encryption verified." . PHP_EOL;
+          '
+
+      - name: Run SQLite migrations and verify WAL defaults
+        run: |
+          php artisan migrate --force --no-interaction
+          php artisan db:seed --force --no-interaction
+          php artisan tinker --execute="
+            \$journal = strtolower((string) DB::scalar('PRAGMA journal_mode;'));
+            \$timeout = (int) DB::scalar('PRAGMA busy_timeout;');
+            \$users = DB::table('users')->count();
+            echo \"journal={\$journal}, busy_timeout={\$timeout}, seeded_users={\$users}\" . PHP_EOL;
+            if (\$journal !== 'wal' || \$timeout !== 5000 || \$users !== 0) {
+                exit(1);
+            }
+          "
+
+      - name: Verify Laravel application boot
+        run: |
+          php artisan --version
+          php artisan about
+
+      - name: Check code formatting with Laravel Pint
+        run: php vendor/bin/pint --test
+
+      - name: Run Pest and PHPUnit test suite
+        run: |
+          php artisan config:clear --ansi
+          php artisan test
+
+  mysql-compatibility:
+    name: PHP 8.3 / MySQL 8.0 Compatibility
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP 8.3
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, mbstring, openssl, pdo_mysql, pdo_sqlite, session, tokenizer, xml, zip
+          tools: composer:v2
+          coverage: none
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php-8.3-mysql-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-8.3-mysql-composer-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install and build frontend assets
+        run: |
+          npm ci --no-fund
+          npm run build
+
+      - name: Start isolated MySQL 8.0 container with masked disposable credentials
+        run: |
+          set -euo pipefail
+          ROOT_PASS="$(openssl rand -hex 24)"
+          USER_PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::${ROOT_PASS}"
+          echo "::add-mask::${USER_PASS}"
+
+          umask 077
+          ENV_FILE="$(mktemp)"
+          trap 'rm -f "${ENV_FILE}"' EXIT
+
+          cat <<EOF > "${ENV_FILE}"
+          MYSQL_ROOT_PASSWORD=${ROOT_PASS}
+          MYSQL_DATABASE=sitepulse_test
+          MYSQL_USER=sitepulse_ci
+          MYSQL_PASSWORD=${USER_PASS}
+          EOF
+
+          docker run -d \
+            --name sitepulse-ci-mysql \
+            --restart no \
+            -p 127.0.0.1:33306:3306 \
+            --env-file "${ENV_FILE}" \
+            --health-cmd="mysqladmin ping -h 127.0.0.1" \
+            --health-interval=5s \
+            --health-timeout=5s \
+            --health-retries=12 \
+            --health-start-period=10s \
+            mysql:8.0 >/dev/null
+
+          rm -f "${ENV_FILE}"
+          echo "DB_PASSWORD=${USER_PASS}" >> "${GITHUB_ENV}"
+          unset ROOT_PASS USER_PASS
+
+          for attempt in $(seq 1 30); do
+            STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' sitepulse-ci-mysql 2>/dev/null || echo 'unknown')"
+            if [ "${STATUS}" = "healthy" ]; then
+              echo "MySQL 8.0 container is healthy."
+              break
+            fi
+            if [ "${attempt}" -eq 30 ]; then
+              echo "MySQL 8.0 container did not reach healthy state (last status: ${STATUS})."
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Prepare environment file without persisting DB credentials
+        run: |
+          cp .env.example .env
+          php -r '
+            $env = file_get_contents(".env");
+            $env = preg_replace("/^DB_CONNECTION=.*/m", "DB_CONNECTION=mysql", $env);
+            file_put_contents(".env", $env);
+          '
+          php -r 'require "vendor/autoload.php"; exit(\App\Support\EnvironmentSetup::prepare(getcwd() ?: "."));'
+
+      - name: Wait for MySQL 8.0 disposable user readiness
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '33306'
+          DB_DATABASE: sitepulse_test
+          DB_USERNAME: sitepulse_ci
+        run: |
+          php -r '
+            $dsn = sprintf("mysql:host=%s;port=%s;dbname=%s", getenv("DB_HOST"), getenv("DB_PORT"), getenv("DB_DATABASE"));
+            for ($attempt = 1; $attempt <= 30; $attempt++) {
+                try {
+                    new PDO($dsn, (string) getenv("DB_USERNAME"), (string) getenv("DB_PASSWORD"), [PDO::ATTR_TIMEOUT => 2]);
+                    echo "MySQL ready on attempt {$attempt}." . PHP_EOL;
+                    exit(0);
+                } catch (Throwable) {
+                    sleep(1);
+                }
+            }
+            fwrite(STDERR, "Timed out waiting for MySQL readiness." . PHP_EOL);
+            exit(1);
+          '
+
+      - name: Run MySQL migrations and verify safe seeding
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: '33306'
+          DB_DATABASE: sitepulse_test
+          DB_USERNAME: sitepulse_ci
+        run: |
+          php artisan migrate:fresh --force --no-interaction
+          php artisan db:seed --force --no-interaction
+          php artisan tinker --execute="
+            \$driver = DB::getDriverName();
+            \$users = DB::table('users')->count();
+            echo \"driver={\$driver}, seeded_users={\$users}\" . PHP_EOL;
+            if (\$driver !== 'mysql' || \$users !== 0) {
+                exit(1);
+            }
+          "
+
+      - name: Run test suite against MySQL 8.0
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: '33306'
+          DB_DATABASE: sitepulse_test
+          DB_USERNAME: sitepulse_ci
+        run: |
+          php artisan config:clear --ansi
+          php artisan test
+
+      - name: Stop and remove MySQL 8.0 container
+        if: always()
+        run: docker rm -f sitepulse-ci-mysql >/dev/null 2>&1 || true

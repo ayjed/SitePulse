@@ -20,6 +20,10 @@ class UserFactory extends Factory
     /**
      * Define the model's default state.
      *
+     * Generates a random unguessable password so automated tests never rely on
+     * or leak a predictable default credential. Tests requiring a known secret
+     * should override the password attribute explicitly.
+     *
      * @return array<string, mixed>
      */
     public function definition(): array
@@ -28,7 +32,7 @@ class UserFactory extends Factory
             'name' => fake()->name(),
             'email' => fake()->unique()->safeEmail(),
             'email_verified_at' => now(),
-            'password' => static::$password ??= Hash::make('password'),
+            'password' => static::$password ??= Hash::make(Str::random(32)),
             'remember_token' => Str::random(10),
         ];
     }

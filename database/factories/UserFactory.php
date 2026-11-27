@@ -33,8 +33,21 @@ class UserFactory extends Factory
             'email' => fake()->unique()->safeEmail(),
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make(Str::random(32)),
+            'is_owner' => false,
+            'owner_slot' => null,
             'remember_token' => Str::random(10),
         ];
+    }
+
+    /**
+     * Configure the factory user as the single authorized site owner.
+     */
+    public function owner(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_owner' => true,
+            'owner_slot' => 1,
+        ]);
     }
 
     /**

@@ -4,13 +4,20 @@ namespace App\Support\SafeHttp;
 
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
 use CurlHandle;
+use InvalidArgumentException;
 
 /**
  * Executes single-hop, IP-pinned, proxy-isolated HTTP/HTTPS transfers via ext-curl.
  */
 class CurlHttpTransport implements HttpTransportInterface
 {
-    private const MAX_HEADER_BYTES = 65536;
+    public const MAX_HEADER_BYTES = 65536;
+
+    public const MAX_HEADER_COUNT = 256;
+
+    public function __construct(
+        private readonly IpAddressPolicy $ipPolicy = new IpAddressPolicy,
+    ) {}
 
     /**
      * Execute the pinned HTTP/HTTPS transport request.
@@ -21,6 +28,11 @@ class CurlHttpTransport implements HttpTransportInterface
         $bodyBuffer = new BoundedBodyBuffer($request->maxBodyBytes);
         $headers = [];
         $headerBytes = 0;
+        $headerCount = 0;
+        $headerLimitExceeded = false;
+
+        // Enforce pinned IP and option construction invariants before touching curl_init().
+        $options = $this->buildCurlOptions($request);
 
         $handle = curl_init();
         if (! $handle instanceof CurlHandle) {
@@ -39,12 +51,17 @@ class CurlHttpTransport implements HttpTransportInterface
         }
 
         try {
-            $options = $this->buildCurlOptions($request);
-
-            $options[CURLOPT_HEADERFUNCTION] = static function ($ch, string $headerLine) use (&$headers, &$headerBytes): int {
+            $options[CURLOPT_HEADERFUNCTION] = static function ($ch, string $headerLine) use (
+                &$headers,
+                &$headerBytes,
+                &$headerCount,
+                &$headerLimitExceeded,
+            ): int {
                 $length = strlen($headerLine);
 
                 if ($headerBytes + $length > self::MAX_HEADER_BYTES) {
+                    $headerLimitExceeded = true;
+
                     return 0;
                 }
 
@@ -57,17 +74,25 @@ class CurlHttpTransport implements HttpTransportInterface
 
                 if (str_starts_with(strtoupper($trimmed), 'HTTP/')) {
                     $headers = [];
+                    $headerCount = 0;
 
                     return $length;
                 }
 
                 $colonPos = strpos($trimmed, ':');
                 if ($colonPos !== false) {
+                    if ($headerCount >= self::MAX_HEADER_COUNT) {
+                        $headerLimitExceeded = true;
+
+                        return 0;
+                    }
+
                     $name = strtolower(trim(substr($trimmed, 0, $colonPos)));
                     $value = trim(substr($trimmed, $colonPos + 1));
 
                     if ($name !== '') {
                         $headers[$name][] = $value;
+                        $headerCount++;
                     }
                 }
 
@@ -115,6 +140,7 @@ class CurlHttpTransport implements HttpTransportInterface
                 curlErrno: $errno,
                 curlError: $error,
                 elapsedMs: $elapsedMs,
+                headerLimitExceeded: $headerLimitExceeded,
             );
         } finally {
             curl_close($handle);
@@ -128,6 +154,16 @@ class CurlHttpTransport implements HttpTransportInterface
      */
     public function buildCurlOptions(TransportRequest $request): array
     {
+        $normalizedPinnedIp = $this->ipPolicy->assertAllowed($request->pinnedIp);
+
+        if ($request->url->isIpLiteral) {
+            $this->ipPolicy->assertAllowed($request->url->host);
+        }
+
+        if ($request->userAgent === '' || preg_match('/[\x00-\x1F\x7F]/', $request->userAgent) === 1) {
+            throw new InvalidArgumentException('Transport User-Agent contains invalid control characters.');
+        }
+
         $options = [
             CURLOPT_URL => $request->url->url,
             CURLOPT_PORT => $request->url->port,
@@ -140,12 +176,39 @@ class CurlHttpTransport implements HttpTransportInterface
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_CERTINFO => true,
-            CURLOPT_CONNECTTIMEOUT => max(1, $request->connectTimeoutSeconds),
-            CURLOPT_TIMEOUT => max(1, $request->timeoutSeconds),
+            CURLOPT_DNS_CACHE_TIMEOUT => 0,
+            CURLOPT_FORBID_REUSE => true,
+            CURLOPT_FRESH_CONNECT => true,
             CURLOPT_LOW_SPEED_LIMIT => max(1, $request->lowSpeedLimitBytesPerSec),
             CURLOPT_LOW_SPEED_TIME => max(1, $request->lowSpeedTimeSeconds),
             CURLOPT_USERAGENT => $request->userAgent,
         ];
+
+        if (defined('CURLOPT_UNRESTRICTED_AUTH')) {
+            $options[CURLOPT_UNRESTRICTED_AUTH] = false;
+        }
+
+        if (defined('CURLOPT_NOSIGNAL')) {
+            $options[CURLOPT_NOSIGNAL] = true;
+        }
+
+        if (defined('CURLOPT_CONNECTTIMEOUT_MS')) {
+            $options[CURLOPT_CONNECTTIMEOUT_MS] = max(1, $request->connectTimeoutMs);
+        } else {
+            $options[CURLOPT_CONNECTTIMEOUT] = max(1, (int) ceil($request->connectTimeoutMs / 1000));
+        }
+
+        if (defined('CURLOPT_TIMEOUT_MS')) {
+            $options[CURLOPT_TIMEOUT_MS] = max(1, $request->timeoutMs);
+        } else {
+            $options[CURLOPT_TIMEOUT] = max(1, (int) ceil($request->timeoutMs / 1000));
+        }
+
+        if (defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4') && defined('CURL_IPRESOLVE_V6')) {
+            $options[CURLOPT_IPRESOLVE] = $this->ipPolicy->isCanonicalIpv4($normalizedPinnedIp)
+                ? CURL_IPRESOLVE_V4
+                : CURL_IPRESOLVE_V6;
+        }
 
         if ($request->method === 'HEAD') {
             $options[CURLOPT_NOBODY] = true;
@@ -155,16 +218,8 @@ class CurlHttpTransport implements HttpTransportInterface
 
         if (! $request->url->isIpLiteral) {
             $options[CURLOPT_RESOLVE] = [
-                "{$request->url->host}:{$request->url->port}:{$request->pinnedIp}",
+                "{$request->url->host}:{$request->url->port}:{$normalizedPinnedIp}",
             ];
-        }
-
-        if ($request->headers !== []) {
-            $formatted = [];
-            foreach ($request->headers as $name => $value) {
-                $formatted[] = "{$name}: {$value}";
-            }
-            $options[CURLOPT_HTTPHEADER] = $formatted;
         }
 
         if (defined('CURLOPT_PROTOCOLS_STR')) {

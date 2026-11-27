@@ -16,6 +16,8 @@ class CanonicalUrlValidator
      */
     public const ALLOWED_SCHEMES = ['http', 'https'];
 
+    public const MAX_URL_LENGTH = 2048;
+
     /**
      * Standard web destination ports permitted for monitoring.
      *
@@ -65,8 +67,8 @@ class CanonicalUrlValidator
      */
     public function validate(string $rawUrl): ValidatedUrl
     {
-        if ($rawUrl === '' || preg_match('/[\x00-\x20\x7F]/', $rawUrl) === 1) {
-            throw new BlockedDestinationException('Destination URL is empty or contains invalid whitespace or control characters.');
+        if ($rawUrl === '' || strlen($rawUrl) > self::MAX_URL_LENGTH || preg_match('/[\x00-\x20\x7F]/', $rawUrl) === 1) {
+            throw new BlockedDestinationException('Destination URL is empty, too long, or contains invalid control characters.');
         }
 
         if (str_starts_with($rawUrl, 'http://')) {
@@ -88,6 +90,10 @@ class CanonicalUrlValidator
         // Block credentials, backslashes, percent-encoded host tricks, and non-ASCII parser differentials.
         if (preg_match('/[@\\\\%\x80-\xFF]/', $authority) === 1) {
             throw new BlockedDestinationException('Destination URL authority contains forbidden credentials or unsafe characters.');
+        }
+
+        if (preg_match('/^[a-zA-Z0-9.:\[\]-]+$/', $authority) !== 1) {
+            throw new BlockedDestinationException('Destination URL authority contains unsupported characters.');
         }
 
         [$rawHost, $port] = $this->parseAuthorityHostAndPort($authority, $scheme);
@@ -128,8 +134,16 @@ class CanonicalUrlValidator
     {
         $trimmed = trim($location);
 
-        if ($trimmed === '' || preg_match('/[\x00-\x1F\x7F\s]/', $trimmed) === 1) {
-            throw new BlockedDestinationException('Redirect Location header is empty or contains invalid characters.');
+        if ($trimmed === '' || strlen($trimmed) > self::MAX_URL_LENGTH || preg_match('/[\x00-\x1F\x7F\s]/', $trimmed) === 1) {
+            throw new BlockedDestinationException('Redirect Location header is empty, too long, or contains invalid characters.');
+        }
+
+        $beforeQueryOrFragment = strpbrk($trimmed, '?#') !== false
+            ? substr($trimmed, 0, strcspn($trimmed, '?#'))
+            : $trimmed;
+
+        if (str_contains($beforeQueryOrFragment, '\\')) {
+            throw new BlockedDestinationException('Redirect Location header contains unsafe backslash characters.');
         }
 
         // Explicit scheme redirects (including blocked schemes like file:// or gopher://) must hit validate().

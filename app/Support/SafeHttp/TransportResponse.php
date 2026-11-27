@@ -22,5 +22,6 @@ final readonly class TransportResponse
         public int $curlErrno = 0,
         public string $curlError = '',
         public int $elapsedMs = 0,
+        public bool $headerLimitExceeded = false,
     ) {}
 }

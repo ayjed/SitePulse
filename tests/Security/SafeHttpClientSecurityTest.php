@@ -253,12 +253,41 @@ test('SEC-13 forces cURL proxy isolation, DNS pinning, disabled auto-redirects, 
         expect($options[CURLOPT_SSL_VERIFYPEER])->toBeTrue();
         expect($options[CURLOPT_SSL_VERIFYHOST])->toBe(2);
         expect($options[CURLOPT_CERTINFO])->toBeTrue();
-        expect($options[CURLOPT_CONNECTTIMEOUT])->toBe(5);
-        expect($options[CURLOPT_TIMEOUT])->toBe(10);
+        expect($options[CURLOPT_DNS_CACHE_TIMEOUT])->toBe(0);
+        expect($options[CURLOPT_FORBID_REUSE])->toBeTrue();
+        expect($options[CURLOPT_FRESH_CONNECT])->toBeTrue();
         expect($options[CURLOPT_LOW_SPEED_LIMIT])->toBe(1024);
         expect($options[CURLOPT_LOW_SPEED_TIME])->toBe(5);
         expect($options[CURLOPT_USERAGENT])->toBe(SafeHttpClient::DEFAULT_USER_AGENT);
         expect($options[CURLOPT_RESOLVE])->toBe(['example.com:443:93.184.216.34']);
+        expect($options)->not->toHaveKey(CURLOPT_HTTPHEADER);
+        expect($options)->not->toHaveKey(CURLOPT_COOKIE);
+        expect($options)->not->toHaveKey(CURLOPT_COOKIEFILE);
+        expect($options)->not->toHaveKey(CURLOPT_COOKIEJAR);
+
+        if (defined('CURLOPT_UNRESTRICTED_AUTH')) {
+            expect($options[CURLOPT_UNRESTRICTED_AUTH])->toBeFalse();
+        }
+
+        if (defined('CURLOPT_NOSIGNAL')) {
+            expect($options[CURLOPT_NOSIGNAL])->toBeTrue();
+        }
+
+        if (defined('CURLOPT_CONNECTTIMEOUT_MS')) {
+            expect($options[CURLOPT_CONNECTTIMEOUT_MS])->toBe(5000);
+        } else {
+            expect($options[CURLOPT_CONNECTTIMEOUT])->toBe(5);
+        }
+
+        if (defined('CURLOPT_TIMEOUT_MS')) {
+            expect($options[CURLOPT_TIMEOUT_MS])->toBe(10000);
+        } else {
+            expect($options[CURLOPT_TIMEOUT])->toBe(10);
+        }
+
+        if (defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+            expect($options[CURLOPT_IPRESOLVE])->toBe(CURL_IPRESOLVE_V4);
+        }
 
         if (defined('CURLOPT_PROTOCOLS_STR')) {
             expect($options[CURLOPT_PROTOCOLS_STR])->toBe('http,https');
@@ -269,6 +298,20 @@ test('SEC-13 forces cURL proxy isolation, DNS pinning, disabled auto-redirects, 
         expect($handle)->not->toBeFalse();
         expect(curl_setopt_array($handle, $options))->toBeTrue();
         curl_close($handle);
+
+        // Also verify IPv6 pinning option compatibility on a real CurlHandle.
+        $ipv6Options = $curlTransport->buildCurlOptions(new TransportRequest(
+            url: $validator->validate('https://ipv6.example.test/health'),
+            pinnedIp: '2606:4700:4700::1111',
+        ));
+        expect($ipv6Options[CURLOPT_RESOLVE])->toBe(['ipv6.example.test:443:2606:4700:4700::1111']);
+        if (defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V6')) {
+            expect($ipv6Options[CURLOPT_IPRESOLVE])->toBe(CURL_IPRESOLVE_V6);
+        }
+        $ipv6Handle = curl_init();
+        expect($ipv6Handle)->not->toBeFalse();
+        expect(curl_setopt_array($ipv6Handle, $ipv6Options))->toBeTrue();
+        curl_close($ipv6Handle);
     } finally {
         putenv($originalHttpProxy === false ? 'http_proxy' : "http_proxy={$originalHttpProxy}");
         putenv($originalUpperHttpsProxy === false ? 'HTTPS_PROXY' : "HTTPS_PROXY={$originalUpperHttpsProxy}");
@@ -515,4 +558,181 @@ test('parses libcurl Expire date strings and distinguishes healthy vs expiring c
     expect($result->tlsIssuer)->toBe('CN=Public Root CA');
     expect($result->tlsExpiresAt)->not->toBeNull();
     expect($result->tlsExpiringSoon)->toBeFalse();
+});
+
+test('Finding 1 regression: disallows custom request headers, validates User-Agent, and never leaks auth or cookies across redirects', function () {
+    // Public API methods and TransportRequest must not accept caller-controlled custom header bags.
+    $requestParams = array_map(
+        static fn (ReflectionParameter $param): string => $param->getName(),
+        (new ReflectionMethod(SafeHttpClient::class, 'request'))->getParameters()
+    );
+    $checkParams = array_map(
+        static fn (ReflectionParameter $param): string => $param->getName(),
+        (new ReflectionMethod(SafeHttpClient::class, 'check'))->getParameters()
+    );
+    $transportProps = array_map(
+        static fn (ReflectionProperty $prop): string => $prop->getName(),
+        (new ReflectionClass(TransportRequest::class))->getProperties()
+    );
+
+    expect($requestParams)->not->toContain('headers');
+    expect($checkParams)->not->toContain('headers');
+    expect($transportProps)->not->toContain('headers');
+
+    // Reject CR/LF/NUL injection in User-Agent before any DNS or cURL execution.
+    expect(fn () => new SafeHttpClient(userAgent: "SitePulse/1.0\r\nAuthorization: Bearer secret"))
+        ->toThrow(InvalidArgumentException::class);
+
+    $validUrl = (new CanonicalUrlValidator)->validate('https://example.com/');
+    expect(fn () => new TransportRequest(url: $validUrl, pinnedIp: '93.184.216.34', userAgent: "SitePulse/1.0\nCookie: sid=1"))
+        ->toThrow(InvalidArgumentException::class);
+
+    // Reject malformed/comma-injected or restricted pinned IP directly inside CurlHttpTransport before curl_init().
+    $curlTransport = new CurlHttpTransport;
+    expect(fn () => $curlTransport->buildCurlOptions(new TransportRequest(url: $validUrl, pinnedIp: '93.184.216.34,127.0.0.1')))
+        ->toThrow(BlockedDestinationException::class);
+    expect(fn () => $curlTransport->buildCurlOptions(new TransportRequest(url: $validUrl, pinnedIp: '127.0.0.1')))
+        ->toThrow(BlockedDestinationException::class);
+
+    // Cross-origin + HTTPS-to-HTTP redirects must emit zero CURLOPT_HTTPHEADER/cookie entries on any hop.
+    $dns = new RecordingDnsResolver(fn (): array => ['93.184.216.34']);
+    $transport = new RecordingHttpTransport(function (TransportRequest $request, int $attempt): TransportResponse {
+        if ($attempt === 0) {
+            return new TransportResponse(
+                statusCode: 302,
+                headers: [
+                    'location' => ['https://origin-b.example.test/step2'],
+                    'set-cookie' => ['session=topsecret; HttpOnly; Secure'],
+                    'www-authenticate' => ['Bearer realm="origin-a"'],
+                ],
+                body: '',
+                bodyTruncated: false,
+                bytesReceived: 0,
+                primaryIp: $request->pinnedIp,
+            );
+        }
+
+        if ($attempt === 1) {
+            return new TransportResponse(
+                statusCode: 302,
+                headers: ['location' => ['http://origin-c.example.test/final']],
+                body: '',
+                bodyTruncated: false,
+                bytesReceived: 0,
+                primaryIp: $request->pinnedIp,
+            );
+        }
+
+        return new TransportResponse(
+            statusCode: 200,
+            headers: [],
+            body: 'ok',
+            bodyTruncated: false,
+            bytesReceived: 2,
+            primaryIp: $request->pinnedIp,
+        );
+    });
+
+    $response = (new SafeHttpClient(dnsResolver: $dns, transport: $transport))
+        ->request('https://origin-a.example.test/start');
+
+    expect($response->statusCode)->toBe(200);
+    expect($response->finalUrl)->toBe('http://origin-c.example.test/final');
+    expect($transport->requests)->toHaveCount(3);
+
+    foreach ($transport->requests as $hopRequest) {
+        $curlOptions = $curlTransport->buildCurlOptions($hopRequest);
+        expect($curlOptions)->not->toHaveKey(CURLOPT_HTTPHEADER);
+        expect($curlOptions)->not->toHaveKey(CURLOPT_COOKIE);
+        expect($curlOptions)->not->toHaveKey(CURLOPT_COOKIEFILE);
+        expect($curlOptions)->not->toHaveKey(CURLOPT_COOKIEJAR);
+    }
+});
+
+test('propagates millisecond redirect budgets without ceiling inflation and treats header floods as HTTP_ERROR', function () {
+    $dns = new RecordingDnsResolver(fn (): array => ['93.184.216.34']);
+    $nowNs = 1_000_000_000;
+
+    // 2s total budget -> Hop 0 takes 1200ms -> Hop 1 must receive exact 800ms timeout (not 1000ms or 2000ms).
+    $transport = new RecordingHttpTransport(function (TransportRequest $request, int $attempt) use (&$nowNs): TransportResponse {
+        if ($attempt === 0) {
+            $nowNs += 1_200_000_000;
+
+            return new TransportResponse(
+                statusCode: 302,
+                headers: ['location' => ['/hop-2']],
+                body: '',
+                bodyTruncated: false,
+                bytesReceived: 0,
+                primaryIp: $request->pinnedIp,
+            );
+        }
+
+        $nowNs += 900_000_000; // pushes past 2000ms total deadline
+
+        return new TransportResponse(
+            statusCode: 0,
+            headers: [],
+            body: '',
+            bodyTruncated: false,
+            bytesReceived: 0,
+            primaryIp: $request->pinnedIp,
+            curlErrno: 28,
+            curlError: 'Operation timed out',
+        );
+    });
+
+    $client = new SafeHttpClient(
+        dnsResolver: $dns,
+        transport: $transport,
+        monotonicClockNs: static function () use (&$nowNs): int {
+            return $nowNs;
+        },
+    );
+
+    $result = $client->check('https://budget.example.test/hop-1', timeoutSeconds: 2);
+
+    expect($transport->requests)->toHaveCount(2);
+    expect($transport->requests[0]->timeoutMs)->toBe(2000);
+    expect($transport->requests[1]->timeoutMs)->toBe(800);
+    expect($result->succeeded)->toBeFalse();
+    expect($result->failureReason)->toBe(SafeHttpFailureReason::DEADLINE_EXCEEDED);
+
+    // Header floods must never masquerade as successful truncated body transfers.
+    $headerFloodClient = new SafeHttpClient(
+        dnsResolver: $dns,
+        transport: new RecordingHttpTransport(fn (TransportRequest $request): TransportResponse => new TransportResponse(
+            statusCode: 200,
+            headers: [],
+            body: '',
+            bodyTruncated: true,
+            bytesReceived: 0,
+            primaryIp: $request->pinnedIp,
+            curlErrno: 23,
+            curlError: 'Header limit exceeded',
+            headerLimitExceeded: true,
+        )),
+    );
+
+    $floodResult = $headerFloodClient->check('https://flood.example.test/');
+    expect($floodResult->succeeded)->toBeFalse();
+    expect($floodResult->failureReason)->toBe(SafeHttpFailureReason::HTTP_ERROR);
+
+    expect(fn () => new BoundedBodyBuffer(-1))->toThrow(InvalidArgumentException::class);
+});
+
+test('redacts credentials and strips control characters from reported check URLs and error messages', function () {
+    $client = new SafeHttpClient(
+        dnsResolver: new RecordingDnsResolver(fn (): array => ['93.184.216.34']),
+        transport: new RecordingHttpTransport(fn (): TransportResponse => throw new RuntimeException('Should not send')),
+    );
+
+    $result = $client->check("https://alice:SuperSecretPassword@example.com/health\r\n");
+
+    expect($result->succeeded)->toBeFalse();
+    expect($result->failureReason)->toBe(SafeHttpFailureReason::SSRF_BLOCKED);
+    expect($result->finalUrl)->not->toContain('SuperSecretPassword');
+    expect($result->finalUrl)->not->toContain("\r");
+    expect($result->finalUrl)->not->toContain("\n");
+    expect((string) $result->errorMessage)->not->toContain('SuperSecretPassword');
 });

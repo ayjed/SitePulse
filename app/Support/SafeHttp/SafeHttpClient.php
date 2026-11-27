@@ -76,8 +76,12 @@ class SafeHttpClient
         private readonly string $userAgent = self::DEFAULT_USER_AGENT,
         ?Closure $monotonicClockNs = null,
     ) {
+        if ($userAgent === '' || preg_match('/[\x00-\x1F\x7F]/', $userAgent) === 1) {
+            throw new InvalidArgumentException('SafeHttpClient User-Agent cannot be empty or contain control characters.');
+        }
+
         $this->dnsResolver = $dnsResolver ?? new NativeDnsResolver;
-        $this->transport = $transport ?? new CurlHttpTransport;
+        $this->transport = $transport ?? new CurlHttpTransport($this->ipPolicy);
         $this->monotonicClockNs = $monotonicClockNs ?? static fn (): int => hrtime(true);
     }
 
@@ -92,7 +96,8 @@ class SafeHttpClient
     /**
      * Perform a hardened HTTP/HTTPS request with pre-flight DNS pinning, peer IP checks, and manual redirects.
      *
-     * @param  array<string, string>  $headers
+     * Caller-supplied custom request headers are intentionally unsupported in Phase 02 to prevent header
+     * injection, host spoofing, and credential/cookie leakage across redirects.
      *
      * @throws BlockedDestinationException
      * @throws SafeHttpRequestException
@@ -101,7 +106,6 @@ class SafeHttpClient
         string $url,
         int $timeoutSeconds = self::DEFAULT_TIMEOUT_SECONDS,
         string $method = 'GET',
-        array $headers = [],
     ): SafeHttpResponse {
         $this->assertValidTimeout($timeoutSeconds);
         $normalizedMethod = $this->normalizeMethod($method);
@@ -127,8 +131,8 @@ class SafeHttpClient
 
             $chosenIp = $this->resolveAndSelectPinnedIp($validated);
 
-            $remainingBudgetSeconds = $this->remainingBudgetSeconds($deadlineNs);
-            if ($remainingBudgetSeconds <= 0) {
+            $remainingBudgetMs = $this->remainingBudgetMs($deadlineNs);
+            if ($remainingBudgetMs <= 0) {
                 throw new SafeHttpRequestException(
                     SafeHttpFailureReason::DEADLINE_EXCEEDED,
                     'Total monitor check deadline exceeded before connecting.'
@@ -139,13 +143,15 @@ class SafeHttpClient
                 url: $validated,
                 pinnedIp: $chosenIp,
                 method: $currentMethod,
-                connectTimeoutSeconds: min(self::CONNECT_TIMEOUT_SECONDS, $remainingBudgetSeconds),
-                timeoutSeconds: $remainingBudgetSeconds,
+                connectTimeoutMs: min(self::CONNECT_TIMEOUT_SECONDS * 1000, $remainingBudgetMs),
+                timeoutMs: $remainingBudgetMs,
                 lowSpeedLimitBytesPerSec: self::LOW_SPEED_LIMIT_BYTES_PER_SEC,
-                lowSpeedTimeSeconds: min(self::LOW_SPEED_TIME_SECONDS, $remainingBudgetSeconds),
+                lowSpeedTimeSeconds: min(
+                    self::LOW_SPEED_TIME_SECONDS,
+                    max(1, (int) ceil($remainingBudgetMs / 1000)),
+                ),
                 maxBodyBytes: self::MAX_BODY_BYTES,
                 userAgent: $this->userAgent,
-                headers: $headers,
             ));
 
             if ($transportResponse->primaryIp !== null && $transportResponse->primaryIp !== '') {
@@ -154,10 +160,11 @@ class SafeHttpClient
 
             $abortedCleanlyForSizeCap = $transportResponse->curlErrno === self::CURLE_WRITE_ERROR_CODE
                 && $transportResponse->bodyTruncated
+                && ! $transportResponse->headerLimitExceeded
                 && $transportResponse->statusCode > 0;
 
             if ($transportResponse->curlErrno !== 0 && ! $abortedCleanlyForSizeCap) {
-                throw $this->classifyTransportFailure($transportResponse);
+                throw $this->classifyTransportFailure($transportResponse, $redirectsFollowed, $deadlineNs);
             }
 
             if ($transportResponse->primaryIp === null || $transportResponse->primaryIp === '') {
@@ -206,8 +213,6 @@ class SafeHttpClient
 
     /**
      * Execute a probe and return a sanitized monitor check summary with canonical failure reasons.
-     *
-     * @param  array<string, string>  $headers
      */
     public function check(
         string $url,
@@ -215,12 +220,11 @@ class SafeHttpClient
         int $expectedStatusMin = 200,
         int $expectedStatusMax = 299,
         string $method = 'GET',
-        array $headers = [],
     ): SafeHttpCheckResult {
         $startedAtNs = $this->nowNs();
 
         try {
-            $response = $this->request($url, $timeoutSeconds, $method, $headers);
+            $response = $this->request($url, $timeoutSeconds, $method);
             $tlsExpiringSoon = $response->isTlsExpiringSoon(self::TLS_EXPIRY_WARNING_DAYS);
 
             if ($response->statusCode < $expectedStatusMin || $response->statusCode > $expectedStatusMax) {
@@ -245,14 +249,14 @@ class SafeHttpClient
             return SafeHttpCheckResult::failure(
                 reason: SafeHttpFailureReason::SSRF_BLOCKED,
                 errorMessage: $this->sanitizeErrorMessage($exception),
-                finalUrl: $url,
+                finalUrl: $this->sanitizeUrlForReport($url),
                 latencyMs: $this->elapsedMs($startedAtNs),
             );
         } catch (SafeHttpRequestException $exception) {
             return SafeHttpCheckResult::failure(
                 reason: $exception->reason,
                 errorMessage: $this->sanitizeErrorMessage($exception),
-                finalUrl: $url,
+                finalUrl: $this->sanitizeUrlForReport($url),
                 latencyMs: $this->elapsedMs($startedAtNs),
             );
         }
@@ -274,7 +278,7 @@ class SafeHttpClient
         $upper = strtoupper(trim($method));
 
         if (! in_array($upper, ['GET', 'HEAD'], true)) {
-            throw new InvalidArgumentException("Unsupported HTTP check method [{$method}].");
+            throw new InvalidArgumentException('Unsupported HTTP check method; only GET and HEAD are permitted.');
         }
 
         return $upper;
@@ -321,7 +325,7 @@ class SafeHttpClient
         }
     }
 
-    private function remainingBudgetSeconds(int $deadlineNs): int
+    private function remainingBudgetMs(int $deadlineNs): int
     {
         $remainingNs = $deadlineNs - $this->nowNs();
 
@@ -329,7 +333,7 @@ class SafeHttpClient
             return 0;
         }
 
-        return (int) ceil($remainingNs / 1_000_000_000);
+        return max(1, intdiv($remainingNs + 999_999, 1_000_000));
     }
 
     private function elapsedMs(int $startedAtNs): int
@@ -407,11 +411,28 @@ class SafeHttpClient
         return [$expiresAt, $issuer];
     }
 
-    private function classifyTransportFailure(TransportResponse $response): SafeHttpRequestException
-    {
+    private function classifyTransportFailure(
+        TransportResponse $response,
+        int $redirectsFollowed,
+        int $deadlineNs,
+    ): SafeHttpRequestException {
+        if ($response->headerLimitExceeded) {
+            return new SafeHttpRequestException(
+                SafeHttpFailureReason::HTTP_ERROR,
+                'Response headers exceeded maximum permitted size or header count.'
+            );
+        }
+
         $errno = $response->curlErrno;
 
         if ($errno === self::CURLE_OPERATION_TIMEDOUT_CODE) {
+            if ($redirectsFollowed > 0 && $this->nowNs() >= $deadlineNs) {
+                return new SafeHttpRequestException(
+                    SafeHttpFailureReason::DEADLINE_EXCEEDED,
+                    'Total monitor check deadline exceeded across redirect hops.'
+                );
+            }
+
             return new SafeHttpRequestException(
                 SafeHttpFailureReason::TIMEOUT,
                 'HTTP probe timed out before receiving a complete response.'
@@ -448,6 +469,7 @@ class SafeHttpClient
     private function sanitizeErrorMessage(Throwable $exception): string
     {
         $message = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $exception->getMessage()) ?? 'HTTP check failed.';
+        $message = preg_replace('#(https?://)[^/@\s]+@#i', '$1[REDACTED]@', $message) ?? $message;
         $message = trim($message);
 
         if ($message === '') {
@@ -455,5 +477,14 @@ class SafeHttpClient
         }
 
         return strlen($message) > 255 ? substr($message, 0, 252).'...' : $message;
+    }
+
+    private function sanitizeUrlForReport(string $url): string
+    {
+        $sanitized = preg_replace('/[\x00-\x1F\x7F]+/', '', $url) ?? '';
+        $sanitized = preg_replace('#^(https?://)[^/?\#@]+@#i', '$1[REDACTED]@', $sanitized) ?? $sanitized;
+        $sanitized = trim($sanitized);
+
+        return strlen($sanitized) > 255 ? substr($sanitized, 0, 252).'...' : $sanitized;
     }
 }

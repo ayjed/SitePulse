@@ -92,7 +92,17 @@ test('SEC-03 blocks RFC 1918 private, CGNAT, documentation, benchmark, multicast
     'ipv6 documentation' => '2001:db8::1',
     'ipv6 unique local' => 'fc00::1',
     'ipv6 link local' => 'fe80::1',
+    'ipv6 site local deprecated' => 'fec0::1',
     'ipv6 multicast' => 'ff02::1',
+    'ipv6 nat64 well known loopback' => '64:ff9b::127.0.0.1',
+    'ipv6 nat64 local use' => '64:ff9b:1::1',
+    'ipv6 siit translated loopback' => '::ffff:0:127.0.0.1',
+    'ipv6 teredo' => '2001::1',
+    'ipv6 benchmarking' => '2001:2::1',
+    'ipv6 orchid' => '2001:10::1',
+    'ipv6 orchid v2' => '2001:20::1',
+    'ipv6 6to4 loopback' => '2002:7f00:1::',
+    'ipv6 doc 3fff' => '3fff::1',
 ]);
 
 test('allows routable public IPv4 and IPv6 addresses adjacent to private boundaries', function (string $ip) {
@@ -106,7 +116,8 @@ test('allows routable public IPv4 and IPv6 addresses adjacent to private boundar
     'below cgnat' => '100.63.255.254',
     'above cgnat' => '100.128.0.1',
     'public ipv4' => '93.184.216.34',
-    'public ipv6' => '2606:4700:4700::1111',
+    'public ipv6 cloudflare' => '2606:4700:4700::1111',
+    'public ipv6 google' => '2001:4860:4860::8888',
 ]);
 
 test('SEC-04 blocks cloud metadata IPs and internal metadata/localhost hostnames before DNS', function (string $url) {
@@ -221,9 +232,12 @@ test('SEC-12 rejects non-HTTP schemes, uppercase schemes, credentials, and URL p
     'percent encoded host' => 'http://%31%32%37.0.0.1/',
     'whitespace inside url' => 'http://example.com/ test',
     'leading zero port' => 'http://example.com:080/',
+    'semicolon in authority' => 'http://example.com;127.0.0.1/',
+    'comma in authority' => 'http://example.com,127.0.0.1/',
+    'oversized url' => 'https://example.com/'.str_repeat('a', 2048),
 ]);
 
-test('canonical redirect resolver handles scheme-relative, root-relative, relative segments, and blocks empty Location', function () {
+test('canonical redirect resolver handles scheme-relative, root-relative, relative segments, and blocks empty or backslash Location', function () {
     $validator = new CanonicalUrlValidator;
     $base = $validator->validate('https://example.com:8443/v1/status?check=1');
 
@@ -240,5 +254,14 @@ test('canonical redirect resolver handles scheme-relative, root-relative, relati
         ->toBe('https://example.com:8443/v1/status?retry=true');
 
     expect(fn () => $validator->resolveRedirectTarget($base, '   '))
+        ->toThrow(BlockedDestinationException::class);
+
+    expect(fn () => $validator->resolveRedirectTarget($base, '\\\\127.0.0.1/secret'))
+        ->toThrow(BlockedDestinationException::class);
+
+    expect(fn () => $validator->resolveRedirectTarget($base, '/\\evil.example.test'))
+        ->toThrow(BlockedDestinationException::class);
+
+    expect(fn () => $validator->resolveRedirectTarget($base, '/'.str_repeat('a', 2050)))
         ->toThrow(BlockedDestinationException::class);
 });

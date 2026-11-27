@@ -2,6 +2,8 @@
 
 namespace App\Support\SafeHttp;
 
+use InvalidArgumentException;
+
 /**
  * Buffers streamed HTTP response bodies up to a strict byte limit before aborting transfer.
  */
@@ -17,7 +19,11 @@ class BoundedBodyBuffer
 
     public function __construct(
         public readonly int $maxBytes = 512000,
-    ) {}
+    ) {
+        if ($maxBytes < 0) {
+            throw new InvalidArgumentException('Maximum body buffer size must be non-negative.');
+        }
+    }
 
     /**
      * Accept a streamed body chunk and return bytes consumed (0 signals libcurl to abort).

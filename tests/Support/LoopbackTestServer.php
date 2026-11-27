@@ -37,6 +37,7 @@ final class LoopbackTestServer
         $opensslCnf = $workDir.'/openssl.cnf';
         file_put_contents($opensslCnf, <<<'CNF'
 [req]
+default_bits = 2048
 distinguished_name = dn
 
 [dn]
@@ -220,6 +221,7 @@ CNF);
         $baseCfg = [
             'config' => $opensslCnf,
             'digest_alg' => 'sha256',
+            'private_key_bits' => 2048,
             'private_key_type' => OPENSSL_KEYTYPE_EC,
             'curve_name' => 'prime256v1',
         ];

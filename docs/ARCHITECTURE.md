@@ -94,7 +94,7 @@ flowchart TD
       This ANSI SQL construct runs identically on both SQLite and MySQL/MariaDB (avoiding MySQL syntax errors with `NULLS FIRST`), guaranteeing that never-checked monitors (`NULL`) and longest-interrupted monitors are prioritized first.
     - State transitions in the Incident State Machine only occur on committed check results, preventing ghost outage states.
 - **Worker Pool Concurrency:** Bounded pool of **5 concurrent requests** (configurable up to 10 via `SITEPULSE_MAX_CONCURRENCY`).
-- **Per-Request Timeouts:** DNS: 2s max; Connect/TLS: 5s max; Total Transfer: 10s default (ceiling: 15s); Body buffer cap: 500 KB.
+- **Per-Request Timeouts:** Connect/TLS: 5s max; Total Transfer: 10s default (min 2s, max 15s); Body buffer cap: 500 KB (`512000` bytes). *(Implementation note: pre-flight DNS lookups execute synchronously per concurrency slot via `NativeDnsResolver` using PHP `dns_get_record()` on slot admission/redirect while TCP/TLS/HTTP transfers overlap concurrently inside `curl_multi`.)*
 - **Monitoring History Write Strategy:** Worker results are buffered in memory and committed in a single atomic database transaction (`DB::transaction`) per batch of 5–10 checks, designed to reduce SQLite write lock contention. Performance gains will be measured via benchmarks in Phase 02.
 
 ### 2.2 SafeHttpClient Service (SSRF Protection Engine)
@@ -103,13 +103,13 @@ The `SafeHttpClient` isolates and enforces:
 2. **Rejection of Ambiguous IP Formats:** Does not rely on normalization functions for nonstandard IP representations. Strictly rejects leading zeros (e.g. `0127.0.0.1`), hexadecimal (`0x`), octal, single integer/dword (`2130706433`), and mixed radix notations.
 3. **Protocol & Port Allowlist:** Standard web ports `80`, `443`, `8080`, `8443`. Explicit denylist blocks sensitive administrative/database ports (21, 22, 25, 3306, 6379, etc.).
 4. **Environment Proxy Isolation:** Explicitly sets `CURLOPT_PROXY => ''` and `CURLOPT_NOPROXY => '*'` to ensure host environment variables cannot route traffic through unintended proxies.
-5. **Pre-Flight DNS Resolution & Pinning:** Resolves target hostname into all associated IPv4/IPv6 addresses via `dns_get_record()`. Validates all records against private/reserved CIDRs. Pins socket IP using cURL's `CURLOPT_RESOLVE`.
+5. **Pre-Flight DNS Resolution & Pinning:** Resolves target hostname synchronously per slot via `dns_get_record(DNS_A + DNS_AAAA)` (using `NativeDnsResolver`; no separate c-ares async DNS dependency). Validates all records against private/reserved CIDRs. Pins socket IP using cURL's `CURLOPT_RESOLVE`.
 6. **Connected Peer IP Verification:** Immediately inspects `curl_getinfo($ch, CURLINFO_PRIMARY_IP)` post-connection. If the connected peer IP is in a restricted range or does not match the pinned IP, the response is discarded and the check is aborted.
 7. **Manual Hop-by-Hop Redirect Validation:** Automatic redirects are disabled (`CURLOPT_FOLLOWLOCATION = false`). Traverses 3xx redirects manually up to 3 hops with loop detection and full re-validation of each hop URL.
 8. **TLS Certificate Validation & Inspection:** Verifies peer certificate (`CURLOPT_SSL_VERIFYPEER = true`), extracts certificate expiration date, and flags certificates expiring within $\le 14$ days.
 
 ### 2.3 Incident State Machine
-- **States:** `OPERATIONAL`, `PENDING_DOWN`, `DOWN`, `PENDING_RECOVERY`.
+- **States:** `UNKNOWN`, `OPERATIONAL`, `PENDING_DOWN`, `DOWN`, `PENDING_RECOVERY`, `PAUSED` (`UNKNOWN` prevents newly created, resumed, or URL-changed monitors from reporting `OPERATIONAL` prior to a completed successful probe).
 - **Transitions:**
   - $N = 2$ consecutive failures required to transition to `DOWN` and open an `Incident`.
   - $M = 2$ consecutive successes required to transition to `OPERATIONAL` and resolve an `Incident`.
@@ -154,7 +154,7 @@ erDiagram
         int expected_status_code_min
         int expected_status_code_max
         boolean is_active
-        string status "operational | pending_down | down | pending_recovery | paused"
+        string status "unknown | operational | pending_down | down | pending_recovery | paused"
         int consecutive_failures
         int consecutive_successes
         datetime last_checked_at

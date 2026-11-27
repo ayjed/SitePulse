@@ -26,7 +26,7 @@ class ApplySecurityHeaders
             false
         );
 
-        if ($request->routeIs('login', 'login.store', 'logout', 'dashboard')) {
+        if ($request->routeIs('login', 'login.store', 'logout', 'dashboard', 'monitors.*')) {
             $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
             $response->headers->set('Pragma', 'no-cache');
         }

@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Models\Monitor;
 use App\Models\User;
+use App\Policies\MonitorPolicy;
 use App\Support\SafeHttp\Contracts\DnsResolverInterface;
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
 use App\Support\SafeHttp\CurlHttpTransport;
@@ -27,5 +29,6 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Gate::define('access-dashboard', static fn (User $user): bool => $user->isOwner());
+        Gate::policy(Monitor::class, MonitorPolicy::class);
     }
 }

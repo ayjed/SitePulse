@@ -6,8 +6,10 @@ use App\Models\Monitor;
 use App\Rules\SafeMonitorUrl;
 use App\Support\SafeHttp\SafeHttpClient;
 use Closure;
+use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Validates monitor creation and update configuration payloads against SitePulse security bounds.
@@ -42,21 +44,24 @@ class MonitorConfigurationRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:120', 'regex:/^[^\x00-\x1F\x7F]+$/'],
             'url' => ['required', 'string', 'max:2048', new SafeMonitorUrl($safeHttpClient)],
-            'check_interval_minutes' => ['required', $strictInt, Rule::in(Monitor::ALLOWED_INTERVALS)],
+            'check_interval_minutes' => ['required', 'integer', $strictInt, Rule::in(Monitor::ALLOWED_INTERVALS)],
             'timeout_seconds' => [
                 'required',
+                'integer',
                 $strictInt,
                 'min:'.Monitor::MIN_TIMEOUT_SECONDS,
                 'max:'.Monitor::MAX_TIMEOUT_SECONDS,
             ],
             'expected_status_code_min' => [
                 'required',
+                'integer',
                 $strictInt,
                 'min:'.Monitor::MIN_HTTP_STATUS,
                 'max:'.Monitor::MAX_HTTP_STATUS,
             ],
             'expected_status_code_max' => [
                 'required',
+                'integer',
                 $strictInt,
                 'min:'.Monitor::MIN_HTTP_STATUS,
                 'max:'.Monitor::MAX_HTTP_STATUS,
@@ -64,6 +69,30 @@ class MonitorConfigurationRequest extends FormRequest
             ],
             'is_active' => ['sometimes', 'boolean'],
         ];
+    }
+
+    /**
+     * Never persist URL userinfo/passwords into session old input on validation failure redirects.
+     */
+    protected function failedValidation(Validator $validator): void
+    {
+        if ($this->expectsJson()) {
+            throw (new ValidationException($validator))
+                ->errorBag($this->errorBag);
+        }
+
+        $input = $this->except($this->dontFlash);
+        $rawUrl = $input['url'] ?? null;
+
+        if (is_string($rawUrl) && preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*://[^/?\#@]+@#', $rawUrl) === 1) {
+            $input['url'] = '';
+        }
+
+        $response = redirect($this->getRedirectUrl())
+            ->withInput($input)
+            ->withErrors($validator->errors(), $this->errorBag);
+
+        throw new ValidationException($validator, $response);
     }
 
     private function strictIntegerRule(): Closure

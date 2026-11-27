@@ -435,7 +435,7 @@ test('rejects invalid intervals, timeouts, status code bounds, names, array payl
         ]);
     $arraySubmission->assertOk();
 
-    // Submitted URL password must never appear in flashed error or HTML response.
+    // Submitted URL password must never appear in flashed old input, error messages, or rendered HTML.
     $credAttempt = $this->actingAs($owner)
         ->from(route('monitors.create'))
         ->followingRedirects()
@@ -444,6 +444,7 @@ test('rejects invalid intervals, timeouts, status code bounds, names, array payl
         ]));
     $credAttempt->assertOk()
         ->assertDontSee('MyUltraSecret999');
+    expect((string) session()->getOldInput('url'))->not->toContain('MyUltraSecret999');
 
     // Minimal payload defaults interval=5, timeout=10, status=200..299, active=true.
     $this->actingAs($owner)->post(route('monitors.store'), [

@@ -76,7 +76,21 @@ class CurlHttpTransport implements HttpTransportInterface
 
             $options[CURLOPT_WRITEFUNCTION] = static fn ($ch, string $chunk): int => $bodyBuffer->append($chunk);
 
-            curl_setopt_array($handle, $options);
+            if (! curl_setopt_array($handle, $options)) {
+                return new TransportResponse(
+                    statusCode: 0,
+                    headers: [],
+                    body: '',
+                    bodyTruncated: false,
+                    bytesReceived: 0,
+                    primaryIp: null,
+                    certInfo: [],
+                    curlErrno: defined('CURLE_BAD_FUNCTION_ARGUMENT') ? CURLE_BAD_FUNCTION_ARGUMENT : 43,
+                    curlError: 'Failed to apply mandatory hardened cURL transport options.',
+                    elapsedMs: max(0, (int) round((hrtime(true) - $startedAtNs) / 1_000_000)),
+                );
+            }
+
             curl_exec($handle);
 
             $errno = curl_errno($handle);
@@ -160,7 +174,7 @@ class CurlHttpTransport implements HttpTransportInterface
         }
 
         if (defined('CURLOPT_REDIR_PROTOCOLS_STR')) {
-            $options[CURLOPT_REDIR_PROTOCOLS_STR] = '';
+            $options[CURLOPT_REDIR_PROTOCOLS_STR] = 'http,https';
         } elseif (defined('CURLOPT_REDIR_PROTOCOLS')) {
             $options[CURLOPT_REDIR_PROTOCOLS] = 0;
         }

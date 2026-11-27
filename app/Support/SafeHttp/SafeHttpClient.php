@@ -5,6 +5,7 @@ namespace App\Support\SafeHttp;
 use App\Exceptions\BlockedDestinationException;
 use App\Support\SafeHttp\Contracts\DnsResolverInterface;
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
+use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
 use InvalidArgumentException;
@@ -61,15 +62,23 @@ class SafeHttpClient
 
     private readonly HttpTransportInterface $transport;
 
+    /** @var Closure(): int */
+    private readonly Closure $monotonicClockNs;
+
+    /**
+     * @param  (Closure(): int)|null  $monotonicClockNs
+     */
     public function __construct(
         private readonly CanonicalUrlValidator $urlValidator = new CanonicalUrlValidator,
         private readonly IpAddressPolicy $ipPolicy = new IpAddressPolicy,
         ?DnsResolverInterface $dnsResolver = null,
         ?HttpTransportInterface $transport = null,
         private readonly string $userAgent = self::DEFAULT_USER_AGENT,
+        ?Closure $monotonicClockNs = null,
     ) {
         $this->dnsResolver = $dnsResolver ?? new NativeDnsResolver;
         $this->transport = $transport ?? new CurlHttpTransport;
+        $this->monotonicClockNs = $monotonicClockNs ?? static fn (): int => hrtime(true);
     }
 
     /**
@@ -97,7 +106,7 @@ class SafeHttpClient
         $this->assertValidTimeout($timeoutSeconds);
         $normalizedMethod = $this->normalizeMethod($method);
 
-        $startedAtNs = hrtime(true);
+        $startedAtNs = $this->nowNs();
         $deadlineNs = $startedAtNs + ($timeoutSeconds * 1_000_000_000);
         $visitedKeys = [];
         $redirectsFollowed = 0;
@@ -177,7 +186,7 @@ class SafeHttpClient
             }
 
             [$tlsExpiresAt, $tlsIssuer] = $this->extractTlsMetadata($validated, $transportResponse->certInfo);
-            $latencyMs = max(0, (int) round((hrtime(true) - $startedAtNs) / 1_000_000));
+            $latencyMs = $this->elapsedMs($startedAtNs);
 
             return new SafeHttpResponse(
                 finalUrl: $validated->url,
@@ -208,7 +217,7 @@ class SafeHttpClient
         string $method = 'GET',
         array $headers = [],
     ): SafeHttpCheckResult {
-        $startedAtNs = hrtime(true);
+        $startedAtNs = $this->nowNs();
 
         try {
             $response = $this->request($url, $timeoutSeconds, $method, $headers);
@@ -314,7 +323,7 @@ class SafeHttpClient
 
     private function remainingBudgetSeconds(int $deadlineNs): int
     {
-        $remainingNs = $deadlineNs - hrtime(true);
+        $remainingNs = $deadlineNs - $this->nowNs();
 
         if ($remainingNs <= 0) {
             return 0;
@@ -325,7 +334,12 @@ class SafeHttpClient
 
     private function elapsedMs(int $startedAtNs): int
     {
-        return max(0, (int) round((hrtime(true) - $startedAtNs) / 1_000_000));
+        return max(0, (int) round(($this->nowNs() - $startedAtNs) / 1_000_000));
+    }
+
+    private function nowNs(): int
+    {
+        return ($this->monotonicClockNs)();
     }
 
     private function isRedirectStatus(int $statusCode): bool

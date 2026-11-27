@@ -2,7 +2,7 @@
 
 > A lightweight, self-hosted website uptime and response-time monitoring application built on Laravel 13.
 
-**Status:** Phase 01 — Foundation and local development (`IN PROGRESS`; foundation merged at `d3d7ffc`, single-owner CLI provisioning and session authentication implemented under retrospective draft-PR review, Phases 02–05 not yet started).
+**Status:** Phase 01 — Foundation and local development (`IN PROGRESS`; foundation merged at `d3d7ffc` and single-owner authentication merged at `776333f`; final Phase 01 maintainer approval pending; Phases 02–05 not yet started).
 
 ## Intended outcomes
 - Monitor website availability and HTTP response time with strict SSRF defenses.

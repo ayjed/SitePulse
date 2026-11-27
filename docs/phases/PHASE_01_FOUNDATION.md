@@ -15,15 +15,15 @@
 - [x] Verify framework boot and pass initial automated tests (`php artisan test`).
 - [x] Remediate PHP 8.3+ lockfile compatibility, unsafe seeding, repeatable setup (`APP_KEY` preservation), and `package-lock.json` (`npm ci` + build).
 - [x] Set up automated formatting checks (`pint`) and GitHub Actions CI workflow (`.github/workflows/ci.yml`).
-- [x] Implement initial single-owner authentication and CLI provisioner (`sitepulse:create-owner`) on review branch (`feat/phase-01-owner-authentication-reviewed`, independent security review pending).
+- [x] Implement initial single-owner authentication and CLI provisioner (`sitepulse:create-owner`) (merged via PR #2 at `776333f2320ca52c7d2f7255305fc100f818a9b3`).
 - [x] Document installation and startup commands (`README.md`, `docs/HOSTING_REQUIREMENTS.md`).
 
 ## Exit criteria
 - [x] Clean install works with documented tool versions locally (PHP 8.4.28 host / WSL or Linux CI needed on Windows Smart App Control sandboxes).
-- [x] CI passes on a fresh checkout (`.github/workflows/ci.yml` verified green on PR #1 merge `d3d7ffc` and `08b0212`; review-PR CI check pending push).
+- [x] CI passes on a fresh checkout (`.github/workflows/ci.yml` verified green on PR #1 `d3d7ffc`, `08b0212`, PR #2 `46051330107`/`46051323625`, and `main` `776333f` run `46053500009`).
 - [x] No credentials or predictable seeded login accounts included in repository.
-- [ ] Independent security review of owner-authentication draft PR completed.
-- [ ] Maintainer approves evidence and review.
+- [x] Independent security review and merge of owner-authentication PR completed (`https://github.com/ayjed/SitePulse/pull/2` merged at `776333f2320ca52c7d2f7255305fc100f818a9b3`).
+- [ ] Maintainer approves evidence and review (Phase 01 remains `IN PROGRESS` pending explicit `@ayjed` sign-off).
 
 ---
 
@@ -192,10 +192,10 @@ To scaffold Laravel 13 without destroying existing planning documentation in the
 | `MAIL_TIMEOUT` | `5` (`config/mail.php` default `5`) | `<= 5` seconds (per ADR-0004) | Slow SMTP socket stalls cron/check loop |
 
 ### 7. Outstanding Phase 01 Acceptance Criteria
-- [x] Remote GitHub Actions execution of `.github/workflows/ci.yml` verifying PHP `8.3`, PHP `8.4`, SQLite WAL, and MySQL `8.0` migrations on Linux runners (verified on PR #1 merge `d3d7ffc` and baseline `08b0212`).
+- [x] Remote GitHub Actions execution of `.github/workflows/ci.yml` verifying PHP `8.3`, PHP `8.4`, SQLite WAL, and MySQL `8.0` migrations on Linux runners (verified on PR #1 merge `d3d7ffc`, PR #2 `46051330107`/`46051323625`, and `main` `776333f` run `46053500009`).
 - [x] Codex independent re-review & merge of PR #1 (`d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b` merged after Symfony 7.4 LTS patch `c615775`).
-- [ ] Independent security review and merge of the Task 10 owner-authentication draft PR (`feat/phase-01-owner-authentication-reviewed`).
-- [ ] Maintainer `@ayjed` explicit review and approval of Phase 01 (`IN PROGRESS`).
+- [x] Independent security review and merge of the Task 10 owner-authentication PR (`https://github.com/ayjed/SitePulse/pull/2`, merged at `776333f2320ca52c7d2f7255305fc100f818a9b3`).
+- [ ] Maintainer `@ayjed` explicit review and approval of Phase 01 final acceptance evidence (`IN PROGRESS`).
 
 ---
 
@@ -309,3 +309,27 @@ Following Codex's `FAIL` audit on commit `1feac7eefba4eec82e6cc821f4e95d5c271f7d
    - **Empty `SESSION_SECURE_COOKIE=` silent fallback (`config/session.php`):** Previously `env('SESSION_SECURE_COOKIE') ?? (...)` treated empty string `''` from `.env` as falsy instead of falling back to `APP_ENV === 'production'` or `https://` `APP_URL`. Replaced with explicit boolean/string parsing and `filter_var` fallback verified under `config:cache`.
    - **CLI interactive-echo error handling, bounded STDIN & NUL-byte password guard (`CreateOwnerCommand`, `OwnerProvisioner`):** Wrapped interactive prompts in exception-safe handling, bounded `--password-stdin` reads (`8192`-byte limit without silent truncation), and rejected `\0` bytes in `OwnerProvisioner::passwordRules()`.
    - **Public `/login` CLI command disclosure (`login.blade.php`):** Removed the internal `php artisan sitepulse:create-owner` command hint from the unauthenticated `/login` footer.
+
+---
+
+## Task 11 — Phase 01 Final Acceptance Audit (2026-11-27)
+
+1. **Merged Pull Requests & Main Branch Protection:**
+   - **PR #1 (`https://github.com/ayjed/SitePulse/pull/1`):** Merged `fix/phase-01-foundation-remediation` (`c6157758d494bfd23f0129fde26e4a3693c982bf`) into `main` at **`d3d7ffcbe8f7e5b1f0a172c5c35357d51770842b`** (`2026-11-27T17:30:24Z`).
+   - **PR #2 (`https://github.com/ayjed/SitePulse/pull/2`):** Merged `feat/phase-01-owner-authentication-reviewed` (`f1e48864d74ebeefea8640f61c03e897c50a6ea2`) into `main` at **`776333f2320ca52c7d2f7255305fc100f818a9b3`** (`2026-11-27T18:59:56Z`).
+   - **PR #2 CI Evidence:** Runs `46051330107` (`pull_request`) and `46051323625` (`push`) passed all **6/6 jobs** (`PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, `PHP 8.3 / MySQL 8.0 Compatibility`), reporting `65 passed (592 assertions)` per job. Post-merge `main` push CI run `46053500009` on `776333f2320ca52c7d2f7255305fc100f818a9b3` also passed **3/3 jobs** (`65 passed (592 assertions)` per job).
+   - **Branch Protection Status (`main`):** Active via GitHub Repository Ruleset `#28256290` (`Protect SitePulse Main`, `branches/main protected: true`), blocking deletion and non-fast-forward force-pushes, requiring Pull Requests, and enforcing required status checks (`PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, `PHP 8.3 / MySQL 8.0 Compatibility`). Classic branch protection is unset (returns `404` because Repository Rulesets are used); note ruleset parameters currently set `required_approving_review_count: 0` and `strict_required_status_checks_policy: false`.
+2. **Independent Code & Environment Verification (`audit/phase-01-final-acceptance` at `776333f`):**
+   - `composer validate --strict --no-interaction`: PASS
+   - `composer audit --locked --no-interaction`: PASS (`0` security advisories)
+   - `composer check-platform-reqs --lock`: PASS (`PHP 8.4.28`, `0` packages in `composer.lock` exclude PHP `8.3`)
+   - `php vendor/bin/pint --test`: PASS (`38 files`)
+   - `php artisan test`: PASS (`65 passed (586 assertions)` locally on Windows PHP `8.4.28`; `65 passed (592 assertions)` on Linux CI including POSIX permission/symlink checks)
+   - `npm ci --no-fund && npm run build`: PASS (`88` packages installed, `0` npm vulnerabilities; `vite v7.3.8`, `61 modules transformed`)
+   - Live SQLite check: `driver=sqlite, journal=wal, busy_timeout=5000, synchronous=1, users=0`
+   - Tracked-file credential scan (`git ls-files`): `0` forbidden `.env`/`.sqlite`/key files and `0` leaked credential matches; `.env` and `database/database.sqlite` ignored and unmodified.
+3. **Remaining Limitations & Status:**
+   - Phase 01 remains **`IN PROGRESS`** awaiting explicit maintainer (`@ayjed`) sign-off on this acceptance audit before Phase 02 can begin.
+   - Windows 11 Smart App Control hosts may still intermittently block unsigned `windows.php.net` extension DLLs (`php_openssl.dll` / `php_fileinfo.dll`) in restricted/offline sandboxes; WSL2, Linux containers, or GitHub Actions `ubuntu-latest` remain the recommended fallback runtimes.
+   - Local workstation does not run Docker or native MySQL 8.0 (`XAMPP` runs MariaDB 10.4), so MySQL 8.0 verification relies on GitHub Actions `ubuntu-latest` CI (`PHP 8.3 / MySQL 8.0 Compatibility`).
+   - Root `/` continues to render `welcome` in Phase 01; monitor management and the monitoring dashboard remain deferred to Phases 02 and 03.

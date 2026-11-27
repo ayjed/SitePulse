@@ -70,7 +70,7 @@ class MonitorController extends Controller
 
         $isActive = $request->desiredActiveState(default: true);
         $monitor->is_active = $isActive;
-        $monitor->status = $isActive ? MonitorStatus::OPERATIONAL : MonitorStatus::PAUSED;
+        $monitor->status = $isActive ? MonitorStatus::UNKNOWN : MonitorStatus::PAUSED;
         $monitor->consecutive_failures = 0;
         $monitor->consecutive_successes = 0;
         $monitor->save();

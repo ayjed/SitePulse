@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'name',
@@ -55,6 +56,16 @@ class Monitor extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get historical check results recorded for this monitor.
+     *
+     * @return HasMany<CheckResult, $this>
+     */
+    public function checkResults(): HasMany
+    {
+        return $this->hasMany(CheckResult::class);
     }
 
     /**
@@ -124,12 +135,12 @@ class Monitor extends Model
     }
 
     /**
-     * Resume this monitor cleanly without executing immediate outbound network requests.
+     * Resume this monitor cleanly into unchecked `unknown` state without immediate network probes.
      */
     public function resume(): bool
     {
         $this->is_active = true;
-        $this->status = MonitorStatus::OPERATIONAL;
+        $this->status = MonitorStatus::UNKNOWN;
         $this->consecutive_failures = 0;
         $this->consecutive_successes = 0;
         $this->next_check_at = null;
@@ -151,7 +162,7 @@ class Monitor extends Model
         $this->tls_expires_at = null;
         $this->tls_last_checked_at = null;
         $this->is_active = $active;
-        $this->status = $active ? MonitorStatus::OPERATIONAL : MonitorStatus::PAUSED;
+        $this->status = $active ? MonitorStatus::UNKNOWN : MonitorStatus::PAUSED;
     }
 
     /**

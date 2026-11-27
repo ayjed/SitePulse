@@ -99,12 +99,14 @@ test('monitors schema defines required columns, composite indexes, foreign keys,
     $owner->delete();
     expect(Monitor::query()->count())->toBe(0);
 
-    // Verify migration rollback & re-apply roundtrip.
-    Artisan::call('migrate:rollback', ['--step' => 1, '--no-interaction' => true]);
-    expect(Schema::hasTable('monitors'))->toBeFalse();
+    // Verify migration rollback & re-apply roundtrip in FK-safe order (check_results -> monitors_default -> monitors).
+    Artisan::call('migrate:rollback', ['--step' => 3, '--no-interaction' => true]);
+    expect(Schema::hasTable('check_results'))->toBeFalse()
+        ->and(Schema::hasTable('monitors'))->toBeFalse();
 
     Artisan::call('migrate', ['--no-interaction' => true]);
-    expect(Schema::hasTable('monitors'))->toBeTrue();
+    expect(Schema::hasTable('monitors'))->toBeTrue()
+        ->and(Schema::hasTable('check_results'))->toBeTrue();
 });
 
 test('owner can create, list, view, edit, pause, resume, and delete monitors with zero outbound network calls', function () {
@@ -154,7 +156,7 @@ test('owner can create, list, view, edit, pause, resume, and delete monitors wit
         ->and($monitor->expected_status_code_min)->toBe(200)
         ->and($monitor->expected_status_code_max)->toBe(204)
         ->and($monitor->is_active)->toBeTrue()
-        ->and($monitor->status)->toBe(MonitorStatus::OPERATIONAL)
+        ->and($monitor->status)->toBe(MonitorStatus::UNKNOWN)
         ->and($monitor->last_checked_at)->toBeNull();
 
     $createResponse->assertRedirect(route('monitors.show', $monitor))
@@ -175,7 +177,7 @@ test('owner can create, list, view, edit, pause, resume, and delete monitors wit
     $this->actingAs($owner)->get(route('monitors.index'))
         ->assertOk()
         ->assertSee('https://api.example.test/healthz')
-        ->assertSee('Operational');
+        ->assertSee('Unknown');
 
     // Edit page + update configuration
     $this->actingAs($owner)->get(route('monitors.edit', $monitor))
@@ -219,7 +221,7 @@ test('owner can create, list, view, edit, pause, resume, and delete monitors wit
 
     $monitor->refresh();
     expect($monitor->is_active)->toBeTrue()
-        ->and($monitor->status)->toBe(MonitorStatus::OPERATIONAL);
+        ->and($monitor->status)->toBe(MonitorStatus::UNKNOWN);
 
     // Delete
     $this->actingAs($owner)->delete(route('monitors.destroy', $monitor))
@@ -332,7 +334,7 @@ test('prevents mass assignment of owner association and internal monitoring stat
 
     $monitor = Monitor::query()->firstOrFail();
     expect($monitor->user_id)->toBe($owner->id)
-        ->and($monitor->status)->toBe(MonitorStatus::OPERATIONAL)
+        ->and($monitor->status)->toBe(MonitorStatus::UNKNOWN)
         ->and($monitor->consecutive_failures)->toBe(0)
         ->and($monitor->consecutive_successes)->toBe(0)
         ->and($monitor->last_status_code)->toBeNull()
@@ -348,7 +350,7 @@ test('prevents mass assignment of owner association and internal monitoring stat
 
     $monitor->refresh();
     expect($monitor->user_id)->toBe($owner->id)
-        ->and($monitor->status)->toBe(MonitorStatus::OPERATIONAL)
+        ->and($monitor->status)->toBe(MonitorStatus::UNKNOWN)
         ->and($monitor->consecutive_failures)->toBe(0)
         ->and($monitor->last_checked_at)->toBeNull();
 });
@@ -458,7 +460,7 @@ test('rejects invalid intervals, timeouts, status code bounds, names, array payl
         ->and($minimal->expected_status_code_min)->toBe(200)
         ->and($minimal->expected_status_code_max)->toBe(299)
         ->and($minimal->is_active)->toBeTrue()
-        ->and($minimal->status)->toBe(MonitorStatus::OPERATIONAL);
+        ->and($minimal->status)->toBe(MonitorStatus::UNKNOWN);
 
     expect(Monitor::query()->count())->toBe(1);
 });
@@ -527,7 +529,7 @@ test('pause and resume enforce scheduling eligibility, preserve telemetry cleanl
     $monitor->refresh();
 
     expect($monitor->is_active)->toBeTrue()
-        ->and($monitor->status)->toBe(MonitorStatus::OPERATIONAL)
+        ->and($monitor->status)->toBe(MonitorStatus::UNKNOWN)
         ->and($monitor->consecutive_failures)->toBe(0)
         ->and($monitor->last_checked_at?->equalTo($checkedAt))->toBeTrue()
         ->and($monitor->last_status_code)->toBe(502)

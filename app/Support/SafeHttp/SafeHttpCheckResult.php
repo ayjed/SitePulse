@@ -26,7 +26,7 @@ final readonly class SafeHttpCheckResult
         public ?SafeHttpResponse $response = null,
     ) {}
 
-    public static function success(SafeHttpResponse $response, bool $tlsExpiringSoon): self
+    public static function success(SafeHttpResponse $response, bool $tlsExpiringSoon, bool $includeResponse = true): self
     {
         return new self(
             succeeded: true,
@@ -42,7 +42,7 @@ final readonly class SafeHttpCheckResult
             tlsExpiringSoon: $tlsExpiringSoon,
             bodyTruncated: $response->bodyTruncated,
             bytesReceived: $response->bytesReceived,
-            response: $response,
+            response: $includeResponse ? $response : null,
         );
     }
 

@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\CheckMonitorsCommand;
 use App\Console\Commands\CreateOwnerCommand;
 use App\Http\Middleware\ApplySecurityHeaders;
 use Illuminate\Foundation\Application;
@@ -14,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withCommands([
         CreateOwnerCommand::class,
+        CheckMonitorsCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->web(append: [

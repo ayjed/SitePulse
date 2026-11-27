@@ -2,7 +2,7 @@
 
 > A lightweight, self-hosted website uptime and response-time monitoring application built on Laravel 13.
 
-**Status:** Phase 01 — Foundation and local development (`IN PROGRESS`; owner authentication CLI and Phases 02–05 are not yet implemented).
+**Status:** Phase 01 — Foundation and local development (`IN PROGRESS`; foundation merged at `d3d7ffc`, single-owner CLI provisioning and session authentication implemented under retrospective draft-PR review, Phases 02–05 not yet started).
 
 ## Intended outcomes
 - Monitor website availability and HTTP response time with strict SSRF defenses.
@@ -50,7 +50,20 @@ php vendor/bin/pint --test
 composer audit
 ```
 
-Database seeding (`php artisan db:seed`) intentionally creates **zero** default or predictable user accounts. Initial owner account provisioning will be introduced in the next Phase 01 milestone (`sitepulse:create-owner`).
+### Provisioning the single site owner
+Database seeding (`php artisan db:seed`) intentionally creates **zero** default or predictable user accounts. Provision the initial administrator strictly from the CLI:
+```bash
+php artisan sitepulse:create-owner
+```
+Or supply the password via standard input without passing credentials in CLI arguments or process lists:
+```bash
+php artisan sitepulse:create-owner --name="Site Owner" --email="owner@example.com" --password-stdin
+```
+
+Authentication details:
+- Public self-registration is disabled (`GET /login` and `POST /login` authenticate the provisioned owner; `POST /logout` terminates the session; `GET /dashboard` serves the authenticated Phase 01 placeholder).
+- Passwords require at least 12 characters with mixed case, numbers, and symbols (<= 72 bytes when using `bcrypt`, `BCRYPT_ROUNDS=12`).
+- `POST /login` enforces CSRF protection and a 5-attempt-per-minute IP rate limit (including malformed payloads), regenerates the session ID upon sign-in, and invalidates sessions / rotates CSRF tokens on sign-out.
 
 ### Production configuration notes
 Before deploying to production, configure `.env` with:

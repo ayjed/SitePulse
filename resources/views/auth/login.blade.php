@@ -41,11 +41,15 @@
                     <label for="email" class="text-sm font-medium text-stone-900 dark:text-stone-100">
                         Email address <span aria-hidden="true">*</span>
                     </label>
+                    @php
+                        $oldEmail = old('email');
+                        $emailValue = is_string($oldEmail) ? $oldEmail : ($prefilledEmail ?? '');
+                    @endphp
                     <input
                         id="email"
                         name="email"
                         type="email"
-                        value="{{ old('email', $prefilledEmail ?? '') }}"
+                        value="{{ $emailValue }}"
                         autocomplete="username"
                         spellcheck="false"
                         autocapitalize="none"
@@ -105,7 +109,7 @@
         </main>
 
         <footer class="mt-6 text-xs text-stone-600 dark:text-stone-400">
-            <p>Single-owner instance. No public registration is available; provision an owner via <code>php artisan sitepulse:create-owner</code>.</p>
+            <p>Single-owner instance. Access is restricted to the site administrator.</p>
         </footer>
     </div>
 @endsection

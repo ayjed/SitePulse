@@ -42,6 +42,11 @@ class OwnerProvisioner
         $rules = [
             'required',
             'string',
+            static function (string $attribute, mixed $value, Closure $fail): void {
+                if (is_string($value) && str_contains($value, "\0")) {
+                    $fail('The password must not contain null bytes.');
+                }
+            },
             Password::min(self::MIN_PASSWORD_LENGTH)
                 ->letters()
                 ->mixedCase()

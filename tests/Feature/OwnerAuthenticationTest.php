@@ -662,9 +662,110 @@ PHP;
         };
 
         expect($resolveSecure(['APP_ENV' => 'production', 'APP_URL' => 'https://monitor.example']))->toBeTrue()
+            ->and($resolveSecure(['APP_ENV' => 'production', 'APP_URL' => 'https://monitor.example', 'SESSION_SECURE_COOKIE' => '']))->toBeTrue()
             ->and($resolveSecure(['APP_ENV' => 'local', 'APP_URL' => 'https://monitor.example']))->toBeTrue()
             ->and($resolveSecure(['APP_ENV' => 'local', 'APP_URL' => 'http://localhost', 'SESSION_SECURE_COOKIE' => 'false']))->toBeFalse();
+
+        // Confirm config/session.php serializes cleanly when config:cache is built.
+        $cacheProc = proc_open(
+            [PHP_BINARY, $workspacePath.DIRECTORY_SEPARATOR.'artisan', 'config:cache', '--no-interaction'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $cachePipes,
+            $workspacePath,
+            buildCleanSubprocessEnv(['APP_ENV' => 'production', 'APP_URL' => 'https://monitor.example'])
+        );
+        expect(is_resource($cacheProc))->toBeTrue();
+        fclose($cachePipes[0]);
+        $cacheOut = (string) stream_get_contents($cachePipes[1]);
+        $cacheErr = (string) stream_get_contents($cachePipes[2]);
+        fclose($cachePipes[1]);
+        fclose($cachePipes[2]);
+        expect(proc_close($cacheProc))->toBe(0, $cacheOut.$cacheErr)
+            ->and($resolveSecure(['APP_ENV' => 'production', 'APP_URL' => 'https://monitor.example']))->toBeTrue();
     } finally {
         File::deleteDirectory($workspacePath);
     }
+});
+
+test('malformed, missing, and array login payloads consume rate limits without HTTP 500 errors or enumeration', function () {
+    User::factory()->owner()->create([
+        'email' => 'owner@example.com',
+        'password' => ownerTestPassword(),
+    ]);
+
+    $attackerIp = '203.0.113.77';
+    RateLimiter::clear('login:ip:'.$attackerIp);
+
+    // Array email[] and password[] inputs must not crash Blade old() or bypass throttling.
+    $arrayPayload = $this->from('/login')
+        ->withServerVariables(['REMOTE_ADDR' => $attackerIp])
+        ->followingRedirects()
+        ->post('/login', [
+            'email' => ['owner@example.com'],
+            'password' => [ownerTestPassword()],
+        ]);
+    $arrayPayload->assertOk()
+        ->assertSee('These credentials do not match our records.');
+
+    // Malformed email strings and empty passwords must count toward the 5 attempts/minute limit.
+    foreach ([
+        ['email' => 'not-an-email', 'password' => 'anything'],
+        ['email' => '', 'password' => 'anything'],
+        ['email' => 'owner@example.com', 'password' => ''],
+        ['email' => 'another-bad-format', 'password' => str_repeat('a', 5000)],
+    ] as $payload) {
+        $this->from('/login')
+            ->withServerVariables(['REMOTE_ADDR' => $attackerIp])
+            ->post('/login', $payload)
+            ->assertRedirect('/login')
+            ->assertSessionHasErrors(['email' => 'These credentials do not match our records.']);
+    }
+
+    // 6th request from the same IP must hit 429 even with valid credentials or malformed JSON.
+    $blocked = $this->withServerVariables(['REMOTE_ADDR' => $attackerIp])
+        ->post('/login', [
+            'email' => 'owner@example.com',
+            'password' => ownerTestPassword(),
+        ]);
+    $blocked->assertTooManyRequests()
+        ->assertSee('Too many login attempts');
+
+    $blockedJson = $this->withServerVariables(['REMOTE_ADDR' => $attackerIp])
+        ->postJson('/login', [
+            'email' => 'not-an-email',
+            'password' => '',
+        ]);
+    $blockedJson->assertTooManyRequests();
+
+    $this->assertGuest();
+});
+
+test('login page does not disclose internal provisioning commands and rejects null-byte or oversized CLI passwords', function () {
+    $this->get('/login')
+        ->assertOk()
+        ->assertDontSee('sitepulse:create-owner');
+
+    foreach (["ValidPass#94!\0extra", 'ValidPass#94!'.str_repeat('x', 8200)] as $badInput) {
+        $stream = fopen('php://temp', 'r+');
+        fwrite($stream, $badInput."\n");
+        rewind($stream);
+
+        CreateOwnerCommand::useStdinStream($stream);
+
+        try {
+            $this->artisan('sitepulse:create-owner', [
+                '--name' => 'Owner',
+                '--email' => 'owner@example.com',
+                '--password-stdin' => true,
+                '--no-interaction' => true,
+            ])
+                ->doesntExpectOutputToContain($badInput)
+                ->assertExitCode(1);
+        } finally {
+            CreateOwnerCommand::useStdinStream(null);
+            fclose($stream);
+        }
+    }
+
+    expect(User::query()->count())->toBe(0);
 });

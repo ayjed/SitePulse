@@ -169,9 +169,22 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE') ?? (
-        env('APP_ENV') === 'production' || str_starts_with((string) env('APP_URL', ''), 'https://')
-    ),
+    'secure' => (static function (): bool {
+        $raw = env('SESSION_SECURE_COOKIE');
+        if (is_bool($raw)) {
+            return $raw;
+        }
+
+        if (is_string($raw) && trim($raw) !== '') {
+            $parsed = filter_var(trim($raw), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($parsed !== null) {
+                return $parsed;
+            }
+        }
+
+        return env('APP_ENV') === 'production'
+            || str_starts_with(strtolower((string) env('APP_URL', '')), 'https://');
+    })(),
 
     /*
     |--------------------------------------------------------------------------

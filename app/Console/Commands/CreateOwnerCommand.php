@@ -51,22 +51,22 @@ class CreateOwnerCommand extends Command
             return self::FAILURE;
         }
 
-        $name = $this->resolveName();
-        if ($name === null) {
-            return self::FAILURE;
-        }
-
-        $email = $this->resolveEmail();
-        if ($email === null) {
-            return self::FAILURE;
-        }
-
-        $password = $this->resolvePassword();
-        if ($password === null) {
-            return self::FAILURE;
-        }
-
         try {
+            $name = $this->resolveName();
+            if ($name === null) {
+                return self::FAILURE;
+            }
+
+            $email = $this->resolveEmail();
+            if ($email === null) {
+                return self::FAILURE;
+            }
+
+            $password = $this->resolvePassword();
+            if ($password === null) {
+                return self::FAILURE;
+            }
+
             $owner = $provisioner->provision($name, $email, $password);
         } catch (ValidationException $e) {
             foreach ($e->errors() as $messages) {
@@ -163,14 +163,28 @@ class CreateOwnerCommand extends Command
         }
 
         // Disable echo fallback so terminals that cannot suppress echo never expose passwords.
-        $password = $this->secret('Owner password (min 12 chars, upper/lower/number/symbol)', false);
+        try {
+            $password = $this->secret('Owner password (min 12 chars, upper/lower/number/symbol)', false);
+        } catch (Throwable) {
+            $this->components->error('Unable to read password without terminal echo; use an interactive terminal or --password-stdin.');
+
+            return null;
+        }
+
         if (! is_string($password) || $password === '') {
             $this->components->error('The password field is required.');
 
             return null;
         }
 
-        $confirmation = $this->secret('Confirm owner password', false);
+        try {
+            $confirmation = $this->secret('Confirm owner password', false);
+        } catch (Throwable) {
+            $this->components->error('Unable to read password confirmation without terminal echo; use an interactive terminal or --password-stdin.');
+
+            return null;
+        }
+
         if (! is_string($confirmation) || ! $this->passwordsMatch($password, $confirmation)) {
             $this->components->error('The password confirmation does not match.');
 
@@ -189,9 +203,15 @@ class CreateOwnerCommand extends Command
             return null;
         }
 
-        $raw = stream_get_contents($stream);
+        $raw = stream_get_contents($stream, 8193);
         if (! is_string($raw)) {
             $this->components->error('Unable to read password from STDIN.');
+
+            return null;
+        }
+
+        if (strlen($raw) > 8192) {
+            $this->components->error('The password input exceeded the maximum supported length.');
 
             return null;
         }

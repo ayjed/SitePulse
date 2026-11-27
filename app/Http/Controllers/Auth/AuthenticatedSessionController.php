@@ -10,6 +10,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Validator;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
@@ -20,6 +21,8 @@ class AuthenticatedSessionController extends Controller
     public const MAX_ATTEMPTS_PER_MINUTE = 5;
 
     public const DECAY_SECONDS = 60;
+
+    private const INVALID_CREDENTIALS_MESSAGE = 'These credentials do not match our records.';
 
     /**
      * Display the owner sign-in page.
@@ -35,6 +38,7 @@ class AuthenticatedSessionController extends Controller
     public function store(Request $request): SymfonyResponse
     {
         $throttleKey = $this->throttleKey($request);
+        $safeEmail = $this->normalizeEmailInput($request->input('email'));
 
         if (RateLimiter::tooManyAttempts($throttleKey, self::MAX_ATTEMPTS_PER_MINUTE)) {
             $seconds = max(1, RateLimiter::availableIn($throttleKey));
@@ -49,16 +53,23 @@ class AuthenticatedSessionController extends Controller
             return response()
                 ->view('auth.login', [
                     'throttleMessage' => $message,
-                    'prefilledEmail' => is_string($request->input('email')) ? mb_strtolower(trim($request->input('email'))) : '',
+                    'prefilledEmail' => $safeEmail,
                 ], SymfonyResponse::HTTP_TOO_MANY_REQUESTS)
                 ->header('Retry-After', (string) $seconds);
         }
 
-        $validated = $request->validate([
-            'email' => ['required', 'string', 'email'],
-            'password' => ['required', 'string'],
+        $validator = Validator::make($request->only(['email', 'password']), [
+            'email' => ['required', 'string', 'email', 'max:255'],
+            'password' => ['required', 'string', 'max:4096'],
         ]);
 
+        if ($validator->fails()) {
+            RateLimiter::hit($throttleKey, self::DECAY_SECONDS);
+
+            return $this->failedLoginResponse($request, $safeEmail);
+        }
+
+        $validated = $validator->validated();
         $email = mb_strtolower(trim($validated['email']));
 
         $authenticated = Auth::attemptWhen(
@@ -73,11 +84,7 @@ class AuthenticatedSessionController extends Controller
         if (! $authenticated) {
             RateLimiter::hit($throttleKey, self::DECAY_SECONDS);
 
-            return back()
-                ->withInput(['email' => $email])
-                ->withErrors([
-                    'email' => 'These credentials do not match our records.',
-                ]);
+            return $this->failedLoginResponse($request, $email);
         }
 
         RateLimiter::clear($throttleKey);
@@ -102,5 +109,32 @@ class AuthenticatedSessionController extends Controller
     private function throttleKey(Request $request): string
     {
         return 'login:ip:'.(string) ($request->ip() ?: 'unknown');
+    }
+
+    private function normalizeEmailInput(mixed $rawEmail): string
+    {
+        if (! is_string($rawEmail)) {
+            return '';
+        }
+
+        return mb_substr(mb_strtolower(trim($rawEmail)), 0, 255);
+    }
+
+    private function failedLoginResponse(Request $request, string $safeEmail): SymfonyResponse
+    {
+        if ($request->expectsJson()) {
+            return new JsonResponse([
+                'message' => self::INVALID_CREDENTIALS_MESSAGE,
+                'errors' => [
+                    'email' => [self::INVALID_CREDENTIALS_MESSAGE],
+                ],
+            ], SymfonyResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        return back()
+            ->withInput(['email' => $safeEmail])
+            ->withErrors([
+                'email' => self::INVALID_CREDENTIALS_MESSAGE,
+            ]);
     }
 }

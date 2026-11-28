@@ -24,14 +24,22 @@ class MonitorOverview extends Component
         Gate::authorize('viewAny', Monitor::class);
     }
 
-    public function showPage(string $cursor = ''): void
+    public function showPage(mixed $cursor = ''): void
     {
-        $parameters = strlen($cursor) <= 128 ? Cursor::fromEncoded($cursor)?->toArray() : null;
-        $id = $parameters['id'] ?? null;
+        $this->cursor = '';
 
-        $this->cursor = is_int($id) && $id > 0 && is_bool($parameters['_pointsToNextItems'] ?? null)
-            ? (new Cursor(['id' => $id], $parameters['_pointsToNextItems']))->encode()
-            : '';
+        if (! is_string($cursor) || strlen($cursor) > 128) {
+            return;
+        }
+
+        $parameters = Cursor::fromEncoded($cursor)?->toArray();
+        $id = $parameters['id'] ?? null;
+        $direction = $parameters['_pointsToNextItems'] ?? null;
+
+        if (is_int($id) && $id > 0 && is_bool($direction)
+            && $cursor === (new Cursor(['id' => $id], $direction))->encode()) {
+            $this->cursor = $cursor;
+        }
     }
 
     public function render(): View

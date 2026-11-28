@@ -108,6 +108,47 @@ test('overview keyset pages are bounded and stable and forged cursors cannot esc
     }
 });
 
+test('malformed pagination inputs safely fall back to the owner first page', function (string $case) {
+    $owner = User::factory()->owner()->create();
+    $foreign = Monitor::factory()->for(User::factory()->create())->create(['name' => 'Foreign private monitor']);
+    $first = Monitor::factory()->for($owner)->create(['name' => 'First owned monitor']);
+    Monitor::factory()->for($owner)->create(['name' => 'Second owned monitor']);
+
+    $validCursor = (new Cursor(['id' => $first->id]))->encode();
+    $cursor = match ($case) {
+        'invalid encoding' => $validCursor.'%',
+        'malformed JSON' => 'ew',
+        'JSON scalar' => 'MQ',
+        'missing direction' => rtrim(base64_encode(json_encode(['id' => $first->id])), '='),
+        'wrong direction type' => (new Cursor(['id' => $first->id], 'true'))->encode(),
+        'wrong ID type' => (new Cursor(['id' => (string) $first->id]))->encode(),
+        'unexpected field' => (new Cursor(['id' => $first->id, 'extra' => 'unexpected']))->encode(),
+        'oversized token' => (new Cursor(['id' => $first->id, 'extra' => str_repeat('x', 130)]))->encode(),
+        'array argument' => ['id' => $first->id],
+        'null argument' => null,
+    };
+
+    Livewire::actingAs($owner)->test(MonitorOverview::class)
+        ->call('showPage', $validCursor)
+        ->assertDontSee($first->name)
+        ->call('showPage', $cursor)
+        ->assertStatus(200)
+        ->assertSet('cursor', '')
+        ->assertSee($first->name)
+        ->assertDontSee($foreign->name);
+})->with([
+    'invalid encoding',
+    'malformed JSON',
+    'JSON scalar',
+    'missing direction',
+    'wrong direction type',
+    'wrong ID type',
+    'unexpected field',
+    'oversized token',
+    'array argument',
+    'null argument',
+]);
+
 test('dashboard responses and authorized Livewire updates are private and perform no outbound work', function () {
     $owner = User::factory()->owner()->create();
     $monitor = Monitor::factory()->for($owner)->operational()->create(['name' => 'Persisted overview monitor']);

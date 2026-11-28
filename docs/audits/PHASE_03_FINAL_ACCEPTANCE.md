@@ -57,7 +57,7 @@ The browser fixture uses a fresh temporary SQLite database, temporary Laravel en
 | 4.1.2 Name, Role, Value and 4.1.3 Status Messages | DOM and accessibility-tree checks confirm labels, disclosure values, busy states, and status/alert roles. | Listen to validation, loading, updates, errors and recovery with a real browser/screen-reader pairing. Verify announcements occur without moving focus when appropriate. |
 | Full WCAG 2.1 A/AA | A selection of axe rules, visual observations, and keyboard tests. | Complete applicability and manual checks for remaining success criteria across whole pages and complete processes. Record browser/AT versions, observations, corrections, and retests. |
 
-A desktop screen-reader executable being present does not establish spoken output. No verified speech or complete AT/browser pairing is recorded. These evidence gaps leave the full FR-7 WCAG requirement open. At audit time the decision on deferral remained open. The maintainer later authorized the limited verification deferral in [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md), effective on merge of the approval documentation. That decision provides no evidence of WCAG conformance. [W3C WCAG 2.1 conformance requirements](https://www.w3.org/TR/WCAG21/#conformance-reqs)
+A desktop screen-reader executable being present does not establish spoken output. No verified speech or complete AT/browser pairing is recorded. These evidence gaps leave the full FR-7 WCAG requirement open. At audit time the decision on deferral remained open. The maintainer later authorized the limited verification deferral in [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md), effective through the verified merge of PR #15. That decision provides no evidence of WCAG conformance. [W3C WCAG 2.1 conformance requirements](https://www.w3.org/TR/WCAG21/#conformance-reqs)
 
 Git-ignored synthetic visual evidence is available locally under `storage/app/private/browser-evidence/` as `final-incident-320.png` and `final-incident-320-scrolled.png`.
 
@@ -90,7 +90,7 @@ Reproduce the Firefox subset with `npm exec -- playwright install firefox` and `
 
 ## 7. Phase 04 readiness and proposed sequence
 
-Phase 04 remains NOT STARTED. Reuse Phase 02 evidence and current contracts. Its acceptance additionally requires verified expiry cases, no unintended duplicate alerts during retries and rechecks, the security test plan and explicit approval. [Phase 04 scope](../phases/PHASE_04_ALERTS_SECURITY.md)
+At audit time Phase 04 was NOT STARTED. Reuse Phase 02 evidence and current contracts. Its acceptance additionally requires verified expiry cases, no unintended duplicate alerts during retries and rechecks, the security test plan and explicit approval. [Phase 04 scope](../phases/PHASE_04_ALERTS_SECURITY.md)
 
 | Proposed task | Dependencies and work | Evidence and decision |
 |---|---|---|
@@ -105,4 +105,4 @@ Phase 04 remains NOT STARTED. Reuse Phase 02 evidence and current contracts. Its
 
 On 2026-11-28, @ayjed accepted the verified functional, security, database, performance and automated browser evidence and authorized the limited deferral under [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md). PR #14 was squash-merged at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. Its [exact-head CI run](https://github.com/ayjed/SitePulse/actions/runs/46160837252) passed all four jobs. Each PHP environment passed 337 tests and 2,366 assertions, and Chromium passed 17 tests.
 
-Phase 03 remains IN REVIEW pending merge of the approval documentation. The maintainer owns [the mandatory Phase 05 release gate](../phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate). The original audit recommendation and evidence above describe the audit baseline.
+Phase 03 is conditionally approved for functional delivery through PR #15 at `1034bd6e936aa2a25d49b8ec4f39a19a9c820439`. The maintainer owns [the mandatory Phase 05 release gate](../phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate). The original audit recommendation and evidence above describe the audit baseline.

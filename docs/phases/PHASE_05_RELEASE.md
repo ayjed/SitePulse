@@ -15,7 +15,7 @@
 **Owner:** @ayjed
 **Status:** OPEN — blocks public release approval
 
-[ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md) records the maintainer's amendment and its exact deferred scope. Phase 03 functional acceptance carries forward only after the approval documentation merges. FR-7 remains a release requirement.
+[ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md) records the maintainer's amendment and its exact deferred scope. Phase 03 conditional functional acceptance took effect through PR #15. FR-7 remains a release requirement.
 
 Close this gate only when all of the following are recorded:
 

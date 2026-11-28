@@ -7,9 +7,6 @@ use Illuminate\Http\Request;
 
 class DashboardController extends Controller
 {
-    /**
-     * Render the minimal authenticated owner dashboard placeholder.
-     */
     public function __invoke(Request $request): View
     {
         return view('dashboard', [

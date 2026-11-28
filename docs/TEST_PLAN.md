@@ -77,6 +77,19 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 
 The [Phase 03 final acceptance audit](audits/PHASE_03_FINAL_ACCEPTANCE.md) records the refreshed run results, native incident table coverage, and remaining manual accessibility evidence. A passing Chromium workflow and zero axe violations do not establish full WCAG 2.1 AA conformance.
 
+### Phase 05 accessibility release verification
+
+Use the exact release candidate and a synthetic owner fixture. Record the candidate SHA, OS, browsers, assistive technologies and versions, viewport, zoom, theme, tester and date. Keep historical P03-04 and P03-05 evidence linked. [Fixture instructions](audits/P03_04_ACCESSIBILITY.md#run-locally) · [Exact deferred scope](decisions/ADR-0005-phase-03-accessibility-release-gate.md#exact-deferred-scope)
+
+1. Build from the lockfile and run `npm run test:browser` using the fixture instructions. Save the test and axe results. Verify all four CI jobs on the candidate.
+2. Independently use Tab, Shift+Tab, Enter, Space and arrow keys through sign-in, dashboard, monitor list and forms, detail, chart disclosure, history controls, confirmation and sign-out. Check focus order and visibility, ability to bypass content, local table scrolling, and focus after updates, errors and cancellation.
+3. Use a real screen reader with an appropriate browser, such as NVDA with Firefox or Narrator with Edge. Record spoken output for status and validation messages, delayed loading, errors and recovery. Navigate headings, chart summary and equivalent data, and table headers and cells. Add combinations for supported workflows wherever behavior differs or coverage remains incomplete.
+4. Review remaining applicable non-text contrast and focus states in both themes and in OS forced-colors mode. Use native browser zoom at 200% and confirm 320 CSS px equivalent reflow at 400% from 1280 CSS px, including intentional local data-table scrolling. Apply WCAG text spacing overrides (1.5 line height, 2em paragraph spacing, 0.12em letter spacing and 0.16em word spacing) and check clipping, overlap and functionality.
+5. Document every applicable A/AA criterion against whole pages and complete processes, including success, empty, loading and error states. For each, record steps, expected and observed results, and evidence. Record inapplicability with rationale and keep every failed or unverified applicable criterion open.
+6. Link fixes and rerun affected checks on the corrected candidate. Keep the automated suite intact. The maintainer reviews the evidence and explicitly closes the [release gate](phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate) before public release approval.
+
+---
+
 ## 3. Evidence Protocol
 
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |

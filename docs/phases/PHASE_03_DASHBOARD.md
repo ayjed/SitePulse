@@ -1,6 +1,6 @@
 # Phase 03 — Dashboard
 
-**Status:** IN REVIEW (P03-01 through P03-04 merged, P03-05 final acceptance audit)
+**Status:** IN REVIEW (P03-01 through P03-05 merged, functional acceptance documentation pending merge)
 
 ## P03-01 — Authorized Status Overview
 
@@ -104,6 +104,8 @@ PR #13 was squash-merged at `d89846b867effe016d33fc986a45ead88d01c58f`. All four
 
 The [final acceptance audit](../audits/PHASE_03_FINAL_ACCEPTANCE.md) maps the requirements to implementation and evidence. It records the incident table correction and distinguishes observed browser and accessibility results from the remaining evidence for FR-7's full WCAG 2.1 AA requirement.
 
+PR #14 was squash-merged at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The maintainer accepted the verified functional, security, database, performance and automated browser evidence on 2026-11-28. [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md) takes effect on merge of the approval documentation. Conditional Phase 03 functional approval follows that merge. The full FR-7 verification remains a [mandatory Phase 05 release gate](PHASE_05_RELEASE.md#mandatory-accessibility-release-gate).
+
 ## Scope
 - [x] Monitor list and status overview.
 - [x] Check history, incident details and response times.
@@ -113,5 +115,5 @@ The [final acceptance audit](../audits/PHASE_03_FINAL_ACCEPTANCE.md) maps the re
 
 ## Exit criteria
 - [x] Status and history are correct for test scenarios.
-- [ ] Complete mobile and keyboard usability review, including the outstanding manual and assistive-technology checks in the acceptance audit.
-- [ ] Maintainer approves visual and functional review.
+- [ ] Complete the remaining manual accessibility review at the mandatory Phase 05 gate under ADR-0005 once the approval documentation merges.
+- [ ] Record conditional functional approval when the maintainer-authorized documentation merges.

@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 03 — Accessible dashboard (P03-05 final acceptance review)
+**Current phase:** 03 — Accessible dashboard (functional acceptance documentation in review)
 **Project status:** IN REVIEW (Phase 02 approved 2026-11-28)
 **Approved by:** @ayjed (Phase 01 approved 2026-11-27; Phase 02 approved 2026-11-28)
 **Approval date:** 2026-11-28
 **Last reviewed:** 2026-11-28
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `audit/phase-03-final-acceptance` (from `main` `d89846b`; `https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `docs/phase-03-approval` (from `main` `df37a2a`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -22,9 +22,9 @@
 | 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
 | 01 | Foundation and local development | APPROVED | clean scaffold, reproducible setup, tests/CI running |
 | 02 | HTTP monitor engine and persistence | APPROVED | scheduled checks, history, security tests (`68.92 MiB` 1-min SQLite storage exception accepted) |
-| 03 | Accessible dashboard | IN REVIEW | correct status and history, mobile and keyboard usability, FR-7 accessibility evidence, maintainer approval |
+| 03 | Accessible dashboard | IN REVIEW | verified functional evidence and effectiveness of the [maintainer decision](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md) on merge |
 | 04 | Alerts, TLS checks, hardening | NOT STARTED | alert deduplication, SSL checks, negative security tests |
-| 05 | Packaging, documentation, public release | NOT STARTED | install verified, license/docs/demo/release checks |
+| 05 | Packaging, documentation, public release | NOT STARTED | install, license, docs, demo, and [mandatory FR-7 accessibility gate](docs/phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate) |
 
 ## Current next actions
 - [x] Merge the Phase 02 documentation closeout via PR #9 (`77070bc5702d976a6b5c1537a98d8e8de4a896e5`). The historical local Windows result was 283 tests / 1,898 assertions. PR #9 CI run `46143650124` recorded 283 tests / 1,904 assertions in each of its three jobs.
@@ -32,7 +32,9 @@
 - [x] Phase 03 P03-02: Merge the history and uptime queries via PR #11 (`91169b7a6f26981df49eb48f90838424c097f372`). Local verification recorded 316 tests / 2,174 assertions. CI run `46150396892` recorded 316 tests / 2,180 assertions per required job.
 - [x] Phase 03 P03-03: Squash-merge the authorized PR #12 replacement into main (798ad0276e31de66ce41f22f5321a19a98c96cde). CI run 46155308200 recorded 337 tests and 2,366 assertions per job.
 - [x] Phase 03 P03-04: Squash-merge PR #13 at `d89846b867effe016d33fc986a45ead88d01c58f`. Authorized CI run `46159162521` and post-merge run `46159905568` passed all four jobs. [Browser verification matrix](docs/audits/P03_04_ACCESSIBILITY.md)
-- [ ] Phase 03 P03-05: Review [the final acceptance audit](docs/audits/PHASE_03_FINAL_ACCEPTANCE.md), complete the outstanding accessibility evidence, and obtain the maintainer's visual and functional decision. Phase 04 remains NOT STARTED.
+- [x] Phase 03 P03-05: Merge the [final acceptance audit](docs/audits/PHASE_03_FINAL_ACCEPTANCE.md) via PR #14 at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The authorized CI run `46160837252` passed all four jobs.
+- [ ] Merge the [approval documentation](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md) before recording conditional Phase 03 functional approval. Phase 04 remains NOT STARTED and requires separate authorization.
+- [ ] @ayjed to close the [mandatory accessibility release gate](docs/phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate) before public release approval.
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
 - [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, Node `v26.13.0`, npm `11.20.0`).

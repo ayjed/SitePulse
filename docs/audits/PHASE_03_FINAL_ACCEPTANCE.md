@@ -1,6 +1,6 @@
 # Phase 03 final acceptance audit
 
-- **Status** IN REVIEW
+- **Status at audit** IN REVIEW
 - **Review date** 2026-11-28
 - **Branch** `audit/phase-03-final-acceptance`
 - **Baseline** `d89846b867effe016d33fc986a45ead88d01c58f` on `main`
@@ -9,7 +9,7 @@
 
 P03-05 verifies the owner dashboard against FR-1 and FR-2 as prerequisites, FR-7 as the dashboard requirement, UI-01 through UI-04, and the Phase 03 exit criteria. The audit covers runtime behavior, Microsoft Windows local verification, GitHub Actions, and the existing benchmark conditions. P03-05 restores the incident table required by FR-7. Production load tests and Phase 04 implementation fall outside this audit.
 
-**GO for review of the audit evidence. NO-GO for final Phase 03 approval or starting Phase 04.** The evidence supports dashboard functionality and bounded security behavior in the tested cases. Full WCAG 2.1 AA conformance and the maintainer's visual and functional acceptance remain open. [Requirements](../REQUIREMENTS.md#37-status-dashboard-fr-7) · [Phase 03 exit criteria](../phases/PHASE_03_DASHBOARD.md#exit-criteria)
+**Recommendation at audit.** **GO for review of the audit evidence. NO-GO for final Phase 03 approval or starting Phase 04.** The evidence supports dashboard functionality and bounded security behavior in the tested cases. Full WCAG 2.1 AA conformance and the maintainer's visual and functional acceptance remain open. [Requirements](../REQUIREMENTS.md#37-status-dashboard-fr-7) · [Phase 03 exit criteria](../phases/PHASE_03_DASHBOARD.md#exit-criteria)
 
 ## 2. Repository and task traceability
 
@@ -57,7 +57,7 @@ The browser fixture uses a fresh temporary SQLite database, temporary Laravel en
 | 4.1.2 Name, Role, Value and 4.1.3 Status Messages | DOM and accessibility-tree checks confirm labels, disclosure values, busy states, and status/alert roles. | Listen to validation, loading, updates, errors and recovery with a real browser/screen-reader pairing. Verify announcements occur without moving focus when appropriate. |
 | Full WCAG 2.1 A/AA | A selection of axe rules, visual observations, and keyboard tests. | Complete applicability and manual checks for remaining success criteria across whole pages and complete processes. Record browser/AT versions, observations, corrections, and retests. |
 
-A desktop screen-reader executable being present does not establish spoken output. No verified speech or complete AT/browser pairing is recorded. These evidence gaps leave the full FR-7 WCAG requirement open. No exception has been approved. If the maintainer wants to accept functional delivery before this verification is complete, record the exact unverified scope and follow-up owner in a separate acceptance decision. Such a decision provides no evidence of WCAG conformance. [W3C WCAG 2.1 conformance requirements](https://www.w3.org/TR/WCAG21/#conformance-reqs)
+A desktop screen-reader executable being present does not establish spoken output. No verified speech or complete AT/browser pairing is recorded. These evidence gaps leave the full FR-7 WCAG requirement open. At audit time the decision on deferral remained open. The maintainer later authorized the limited verification deferral in [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md), effective on merge of the approval documentation. That decision provides no evidence of WCAG conformance. [W3C WCAG 2.1 conformance requirements](https://www.w3.org/TR/WCAG21/#conformance-reqs)
 
 Git-ignored synthetic visual evidence is available locally under `storage/app/private/browser-evidence/` as `final-incident-320.png` and `final-incident-320-scrolled.png`.
 
@@ -100,3 +100,9 @@ Phase 04 remains NOT STARTED. Reuse Phase 02 evidence and current contracts. Its
 | 04-04 Review security and release evidence | Depends on 04-02 and 04-03. Review auth, rate limits, cookies, CSRF, safe errors, secrets and notification configuration. Run the security, delivery, transport, PHP/database and browser suites. | Record counts, any transport/provider limitations and explicit maintainer sign-off before enabling production workflows or moving phases. |
 
 **Branch protection recommendation.** Add status context `Chromium / Browser and Accessibility` with integration GitHub Actions (`integration_id: 15368`) to the existing `main` ruleset. Keep `PHP 8.3 / SQLite`, `PHP 8.4 / SQLite` and `PHP 8.3 / MySQL 8.0 Compatibility` as required checks, and preserve the existing strict-update policy. The Chromium workflow already runs for PRs targeting `main`. This proposal requires separate maintainer authorization. [GitHub repository rules](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch)
+
+## 8. Maintainer disposition
+
+On 2026-11-28, @ayjed accepted the verified functional, security, database, performance and automated browser evidence and authorized the limited deferral under [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md). PR #14 was squash-merged at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. Its [exact-head CI run](https://github.com/ayjed/SitePulse/actions/runs/46160837252) passed all four jobs. Each PHP environment passed 337 tests and 2,366 assertions, and Chromium passed 17 tests.
+
+Phase 03 remains IN REVIEW pending merge of the approval documentation. The maintainer owns [the mandatory Phase 05 release gate](../phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate). The original audit recommendation and evidence above describe the audit baseline.

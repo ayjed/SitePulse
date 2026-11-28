@@ -68,22 +68,23 @@ flowchart TD
   - **Important Clarification:** The parameter `10` sets the **cache lock expiration TTL (10 minutes)**, which prevents permanent deadlocks if a process is abruptly terminated (`SIGKILL`). It does **not** enforce a process execution runtime limit.
   - If a previous execution is still running when cron fires, the new invocation detects the active lock, logs an informational notice, and exits cleanly with exit code `0`.
 - **Monotonic Execution Deadline:**
-  - Wall-clock time can drift or jump; execution time is strictly measured via high-resolution monotonic time (`hrtime(true)`).
-  - Target deadline: **45 seconds** from command invocation.
-  - Hard deadline ceiling: **50 seconds**.
-  - Before picking up any new batch of monitors, the command evaluates:
+  - Wall-clock time can drift or jump; elapsed budget is measured from the start of `MonitorCheckRunner::run()` via high-resolution monotonic time (`hrtime(true)`).
+  - Target intake deadline: **45 seconds** from run entry (shared across lock check, monitor selection, synchronous DNS/HTTP admission, and incremental batch commits).
+  - Hard HTTP cancellation ceiling: **50 seconds** from run entry.
+  - Before issuing batches (and before admitting each queued monitor in `SafeHttpClient::checkBatch()`), the engine verifies remaining whole-run monotonic budget:
     ```php
-    if (hrtime(true) >= $deadlineNanos) {
-        break; // Cease picking up new batches; initiate graceful wrap-up
+    if ($this->nowNs() >= $softDeadlineNs) {
+        // Cease admitting new monitors; finish/cancel active handles up to $hardDeadlineNs
     }
     ```
+  - **Scope Boundary of Monotonic Deadlines:** PHP synchronous operations — database queries (`Monitor::dueForCheck()`), database commits (`CheckBatchPersister::persistBatch()`), and blocking C stub-resolver DNS lookups (`dns_get_record()`) — cannot be preempted mid-call by `hrtime(true)`. Total runtime can therefore exceed 50 seconds if a final blocking DB or OS DNS call stalls near cutoff.
 - **Cancellation of Outstanding HTTP Handles:**
-  - While processing a batch via `curl_multi`, if the hard deadline (50s) is reached:
+  - While processing a batch via `curl_multi`, if the hard deadline (50s from run start) is reached:
     - Active easy handles in the multi pool are removed (`curl_multi_remove_handle`) and closed (`curl_close`).
-    - Cancelled handles are aborted to ensure the process exits cleanly before the next cron tick.
+    - Cancelled handles are aborted to leave the process ready for exit before the next cron tick.
 - **Handling of Partially Completed Batches:**
-  - Checks within a batch that completed successfully or failed with confirmed network errors before the deadline are committed in a single database transaction (`DB::transaction`).
-  - In-flight checks that were cancelled due to deadline expiration are **not** marked as failed (preventing false outage alerts). Their `last_checked_at` is left untouched, leaving them due for the next cron cycle.
+  - Checks within a batch that completed successfully or failed with confirmed network errors before cutoff are committed atomically (`DB::transaction`) guarded by an optimistic `monitors.revision` compare-and-swap check (`id` + `revision` + active/non-paused state) to discard same-second stale probes.
+  - In-flight checks that were cancelled due to deadline expiration are **not** marked as failed (preventing false outage alerts). Their `last_checked_at` and status counters are left untouched, keeping them due for the next cron cycle.
 - **Recovery from Forced Termination:**
   - If an execution is terminated abruptly (`SIGKILL`, host process manager):
     - Unchecked or interrupted monitors retain their older `last_checked_at` timestamp.
@@ -91,10 +92,10 @@ flowchart TD
       ```sql
       ORDER BY (CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END) ASC, last_checked_at ASC
       ```
-      This ANSI SQL construct runs identically on both SQLite and MySQL/MariaDB (avoiding MySQL syntax errors with `NULLS FIRST`), guaranteeing that never-checked monitors (`NULL`) and longest-interrupted monitors are prioritized first.
-    - State transitions in the Incident State Machine only occur on committed check results, preventing ghost outage states.
+      This ANSI SQL construct runs identically on both SQLite and MySQL/MariaDB (avoiding MySQL syntax errors with `NULLS FIRST`), ensuring that never-checked monitors (`NULL`) and longest-interrupted monitors are prioritized first.
+    - State transitions only occur on committed, revision-verified check results, preventing ghost outage states.
 - **Worker Pool Concurrency:** Bounded pool of **5 concurrent requests** (configurable up to 10 via `SITEPULSE_MAX_CONCURRENCY`).
-- **Per-Request Timeouts:** Connect/TLS: 5s max; Total Transfer: 10s default (min 2s, max 15s); Body buffer cap: 500 KB (`512000` bytes). *(Implementation note: pre-flight DNS lookups execute synchronously per concurrency slot via `NativeDnsResolver` using PHP `dns_get_record()` on slot admission/redirect while TCP/TLS/HTTP transfers overlap concurrently inside `curl_multi`.)*
+- **Per-Request Timeouts:** Connect/TLS: 5s max; Total Transfer: 10s default (min 2s, max 15s); Body buffer cap: 500 KB (`512000` bytes). *(Implementation limitation: pre-flight DNS lookups execute synchronously per concurrency slot via `NativeDnsResolver` using PHP `dns_get_record()`, which has no portable per-call socket timeout parameter without external PECL/async DNS libraries or thread-unsafe `putenv('RES_OPTIONS')`. Monotonic deadlines are enforced before lookup and between combined-query vs split `DNS_A` / `DNS_AAAA` fallbacks so dual-homed IPv4+IPv6 SSRF validation is never weakened.)*
 - **Monitoring History Write Strategy:** Worker results are buffered in memory and committed in a single atomic database transaction (`DB::transaction`) per batch of 5–10 checks, designed to reduce SQLite write lock contention. Performance gains will be measured via benchmarks in Phase 02.
 
 ### 2.2 SafeHttpClient Service (SSRF Protection Engine)

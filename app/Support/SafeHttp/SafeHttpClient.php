@@ -3,6 +3,7 @@
 namespace App\Support\SafeHttp;
 
 use App\Exceptions\BlockedDestinationException;
+use App\Support\SafeHttp\Contracts\DeadlineAwareDnsResolverInterface;
 use App\Support\SafeHttp\Contracts\DnsResolverInterface;
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
 use App\Support\SafeHttp\Contracts\MultiTransportDriverInterface;
@@ -189,6 +190,8 @@ class SafeHttpClient
         int|float $softDeadlineSeconds = 45,
         int|float $hardDeadlineSeconds = 50,
         ?callable $onOutcome = null,
+        ?int $softDeadlineNs = null,
+        ?int $hardDeadlineNs = null,
     ): array {
         $concurrency = max(1, min(10, $maxConcurrency));
 
@@ -211,8 +214,12 @@ class SafeHttpClient
         }
 
         $batchStartedAtNs = $this->nowNs();
-        $softDeadlineNs = $batchStartedAtNs + (int) round($softDeadlineSeconds * 1_000_000_000);
-        $hardDeadlineNs = $batchStartedAtNs + (int) round($hardDeadlineSeconds * 1_000_000_000);
+        $resolvedSoftDeadlineNs = $softDeadlineNs ?? ($batchStartedAtNs + (int) round($softDeadlineSeconds * 1_000_000_000));
+        $resolvedHardDeadlineNs = $hardDeadlineNs ?? ($batchStartedAtNs + (int) round($hardDeadlineSeconds * 1_000_000_000));
+
+        if ($resolvedHardDeadlineNs < $resolvedSoftDeadlineNs) {
+            throw new InvalidArgumentException('Batch hardDeadlineNs must be greater than or equal to softDeadlineNs.');
+        }
 
         $total = count($queue);
         $nextIndex = 0;
@@ -235,12 +242,12 @@ class SafeHttpClient
             &$activeStates,
             $total,
             $queue,
-            $softDeadlineNs,
-            $hardDeadlineNs,
+            $resolvedSoftDeadlineNs,
+            $resolvedHardDeadlineNs,
             $emitOutcome,
         ): ?array {
             while ($nextIndex < $total) {
-                if ($this->nowNs() >= $softDeadlineNs) {
+                if ($this->nowNs() >= $resolvedSoftDeadlineNs) {
                     return null;
                 }
 
@@ -250,16 +257,14 @@ class SafeHttpClient
                 $target = $queue[$index];
                 $startedAtNs = $this->nowNs();
                 $deadlineNs = $startedAtNs + ($target->timeoutSeconds * 1_000_000_000);
+                $dnsDeadlineNs = min($deadlineNs, $resolvedHardDeadlineNs);
                 $method = $this->normalizeMethod($target->method);
                 $visitedKeys = [];
 
                 try {
-                    $hop = $this->prepareHop($target->url, $method, $visitedKeys, $deadlineNs);
+                    $hop = $this->prepareHop($target->url, $method, $visitedKeys, $deadlineNs, $dnsDeadlineNs);
                 } catch (BlockedDestinationException|SafeHttpRequestException $exception) {
-                    if ($this->nowNs() >= $hardDeadlineNs
-                        && $exception instanceof SafeHttpRequestException
-                        && $exception->reason === SafeHttpFailureReason::DEADLINE_EXCEEDED
-                    ) {
+                    if ($this->nowNs() >= $resolvedHardDeadlineNs) {
                         $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
 
                         return null;
@@ -271,7 +276,7 @@ class SafeHttpClient
                     continue;
                 }
 
-                if ($this->nowNs() >= $hardDeadlineNs) {
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
                     $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
 
                     return null;
@@ -299,7 +304,7 @@ class SafeHttpClient
 
         $onComplete = function (int|string $id, TransportResponse $transportResponse) use (
             &$activeStates,
-            $hardDeadlineNs,
+            $resolvedHardDeadlineNs,
             $emitOutcome,
         ): ?TransportRequest {
             $index = (int) $id;
@@ -337,7 +342,7 @@ class SafeHttpClient
                     return null;
                 }
 
-                if ($this->nowNs() >= $hardDeadlineNs) {
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
                     unset($activeStates[$index]);
                     $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
 
@@ -352,9 +357,10 @@ class SafeHttpClient
                     method: $state['method'],
                     visitedKeys: $state['visitedKeys'],
                     deadlineNs: $state['deadlineNs'],
+                    dnsDeadlineNs: min($state['deadlineNs'], $resolvedHardDeadlineNs),
                 );
 
-                if ($this->nowNs() >= $hardDeadlineNs) {
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
                     unset($activeStates[$index]);
                     $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
 
@@ -369,10 +375,7 @@ class SafeHttpClient
             } catch (BlockedDestinationException|SafeHttpRequestException $exception) {
                 unset($activeStates[$index]);
 
-                if ($this->nowNs() >= $hardDeadlineNs
-                    && $exception instanceof SafeHttpRequestException
-                    && $exception->reason === SafeHttpFailureReason::DEADLINE_EXCEEDED
-                ) {
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
                     $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
 
                     return null;
@@ -400,7 +403,7 @@ class SafeHttpClient
 
         $this->multiTransport->run(
             maxConcurrency: $concurrency,
-            hardDeadlineNs: $hardDeadlineNs,
+            hardDeadlineNs: $resolvedHardDeadlineNs,
             nextJob: $nextJob,
             onComplete: $onComplete,
             onCancelled: $onCancelled,
@@ -426,8 +429,13 @@ class SafeHttpClient
      * @param  array<string, bool>  $visitedKeys
      * @return array{validated: ValidatedUrl, pinnedIp: string, request: TransportRequest}
      */
-    private function prepareHop(string $url, string $method, array &$visitedKeys, int $deadlineNs): array
-    {
+    private function prepareHop(
+        string $url,
+        string $method,
+        array &$visitedKeys,
+        int $deadlineNs,
+        ?int $dnsDeadlineNs = null,
+    ): array {
         $validated = $this->urlValidator->validate($url);
         $visitKey = $validated->canonicalKey();
 
@@ -439,7 +447,7 @@ class SafeHttpClient
         }
         $visitedKeys[$visitKey] = true;
 
-        $chosenIp = $this->resolveAndSelectPinnedIp($validated);
+        $chosenIp = $this->resolveAndSelectPinnedIp($validated, $dnsDeadlineNs ?? $deadlineNs);
 
         $remainingBudgetMs = $this->remainingBudgetMs($deadlineNs);
         if ($remainingBudgetMs <= 0) {
@@ -613,13 +621,29 @@ class SafeHttpClient
         return $upper;
     }
 
-    private function resolveAndSelectPinnedIp(ValidatedUrl $validated): string
+    private function resolveAndSelectPinnedIp(ValidatedUrl $validated, ?int $deadlineNs = null): string
     {
         if ($validated->isIpLiteral) {
             return $this->ipPolicy->assertAllowed($validated->host);
         }
 
-        $resolvedIps = $this->dnsResolver->resolve($validated->host);
+        if ($deadlineNs !== null && $this->nowNs() >= $deadlineNs) {
+            throw new SafeHttpRequestException(
+                SafeHttpFailureReason::DEADLINE_EXCEEDED,
+                'Remaining deadline exceeded prior to DNS resolution.'
+            );
+        }
+
+        $resolvedIps = $this->dnsResolver instanceof DeadlineAwareDnsResolverInterface
+            ? $this->dnsResolver->resolveWithDeadline($validated->host, $deadlineNs)
+            : $this->dnsResolver->resolve($validated->host);
+
+        if ($deadlineNs !== null && $this->nowNs() >= $deadlineNs) {
+            throw new SafeHttpRequestException(
+                SafeHttpFailureReason::DEADLINE_EXCEEDED,
+                'Remaining deadline elapsed during synchronous DNS resolution.'
+            );
+        }
 
         if ($resolvedIps === []) {
             throw new SafeHttpRequestException(

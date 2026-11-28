@@ -60,6 +60,9 @@ final class MonitorCheckRunner
             throw new InvalidArgumentException('Monitor check limit must be a positive integer.');
         }
 
+        $softDeadlineNs = $startedAtNs + (int) round($softSeconds * 1_000_000_000);
+        $hardDeadlineNs = $startedAtNs + (int) round($hardSeconds * 1_000_000_000);
+
         $batchPersistSize = max(5, min(10, (int) config('sitepulse.batch_persist_size', 10)));
         $lockTtlSeconds = max(60, (int) config('sitepulse.check_lock_ttl_seconds', 600));
         $lockStore = config('sitepulse.lock_store');
@@ -122,6 +125,37 @@ final class MonitorCheckRunner
                 );
             }
 
+            if ($this->nowNs() >= $softDeadlineNs) {
+                $elapsedMs = $this->elapsedMs($startedAtNs);
+                $hardReached = $this->nowNs() >= $hardDeadlineNs;
+
+                Log::info('SitePulse monitor check skipped probe execution because whole-run soft deadline elapsed during selection.', [
+                    'due_count' => $dueCount,
+                    'started_count' => 0,
+                    'completed_count' => 0,
+                    'soft_deadline_skipped_count' => $dueCount,
+                    'concurrency' => $effectiveConcurrency,
+                    'soft_deadline_reached' => true,
+                    'hard_deadline_reached' => $hardReached,
+                    'elapsed_ms' => $elapsedMs,
+                ]);
+
+                return new MonitorRunReport(
+                    lockAcquired: true,
+                    dueCount: $dueCount,
+                    startedCount: 0,
+                    completedCount: 0,
+                    succeededCount: 0,
+                    failedCount: 0,
+                    staleDiscardedCount: 0,
+                    softDeadlineSkippedCount: $dueCount,
+                    hardDeadlineCancelledCount: 0,
+                    elapsedMs: $elapsedMs,
+                    softDeadlineReached: true,
+                    hardDeadlineReached: $hardReached,
+                );
+            }
+
             $targets = [];
             foreach ($dueMonitors as $monitor) {
                 $snapshot = MonitorProbeSnapshot::fromMonitor($monitor);
@@ -176,6 +210,7 @@ final class MonitorCheckRunner
                     &$softDeadlineSkippedCount,
                     &$hardDeadlineCancelledCount,
                     $batchPersistSize,
+                    $hardDeadlineNs,
                     $flushBuffer,
                 ): void {
                     if ($outcome->cancelled) {
@@ -202,17 +237,19 @@ final class MonitorCheckRunner
                         'checkedAt' => CarbonImmutable::instance(now('UTC')),
                     ];
 
-                    if (count($buffer) >= $batchPersistSize) {
+                    if (count($buffer) >= $batchPersistSize && $this->nowNs() < $hardDeadlineNs) {
                         $flushBuffer();
                     }
                 },
+                softDeadlineNs: $softDeadlineNs,
+                hardDeadlineNs: $hardDeadlineNs,
             );
 
             $flushBuffer();
 
             $elapsedMs = $this->elapsedMs($startedAtNs);
-            $softDeadlineReached = $softDeadlineSkippedCount > 0 || $hardDeadlineCancelledCount > 0;
-            $hardDeadlineReached = $hardDeadlineCancelledCount > 0;
+            $softDeadlineReached = $softDeadlineSkippedCount > 0 || $hardDeadlineCancelledCount > 0 || $this->nowNs() >= $softDeadlineNs;
+            $hardDeadlineReached = $hardDeadlineCancelledCount > 0 || $this->nowNs() >= $hardDeadlineNs;
 
             Log::info('SitePulse monitor check run finished.', [
                 'due_count' => $dueCount,

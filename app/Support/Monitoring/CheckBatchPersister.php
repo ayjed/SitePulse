@@ -3,6 +3,7 @@
 namespace App\Support\Monitoring;
 
 use App\Enums\CheckResultStatus;
+use App\Enums\MonitorStatus;
 use App\Models\CheckResult;
 use App\Models\Monitor;
 use App\Support\SafeHttp\SafeHttpCheckResult;
@@ -10,7 +11,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Atomically persists bounded batches of completed monitor checks with stale-state race protection.
+ * Atomically persists bounded batches of completed monitor checks with persistent revision race protection.
  */
 final class CheckBatchPersister
 {
@@ -21,7 +22,7 @@ final class CheckBatchPersister
     ) {}
 
     /**
-     * Persist completed check outcomes in one atomic transaction using deterministic row locking order.
+     * Persist completed check outcomes in one atomic transaction with compare-and-swap revision checks.
      *
      * @param  array<int, array{snapshot: MonitorProbeSnapshot, result: SafeHttpCheckResult, checkedAt: CarbonImmutable}>  $batch
      * @return array{persisted: int, staleDiscarded: int, succeeded: int, failed: int}
@@ -81,25 +82,41 @@ final class CheckBatchPersister
                     checkSucceeded: $result->succeeded,
                 );
 
-                $monitor->status = $transition->nextStatus;
-                $monitor->consecutive_failures = $transition->consecutiveFailures;
-                $monitor->consecutive_successes = $transition->consecutiveSuccesses;
-                $monitor->last_checked_at = $checkedAt;
-                $monitor->next_check_at = $checkedAt->addMinutes((int) $monitor->check_interval_minutes);
-                $monitor->last_status_code = $result->statusCode;
-                $monitor->last_latency_ms = max(0, $result->latencyMs);
+                $formattedCheckedAt = $checkedAt->format('Y-m-d H:i:s');
+                $updateAttributes = [
+                    'status' => $transition->nextStatus->value,
+                    'consecutive_failures' => $transition->consecutiveFailures,
+                    'consecutive_successes' => $transition->consecutiveSuccesses,
+                    'last_checked_at' => $formattedCheckedAt,
+                    'next_check_at' => $checkedAt->addMinutes((int) $monitor->check_interval_minutes)->format('Y-m-d H:i:s'),
+                    'last_status_code' => $result->statusCode,
+                    'last_latency_ms' => max(0, $result->latencyMs),
+                    'revision' => $snapshot->revision + 1,
+                    'updated_at' => $formattedCheckedAt,
+                ];
 
                 if ($snapshot->scheme === 'https' && $result->tlsExpiresAt !== null) {
-                    $monitor->tls_expires_at = CarbonImmutable::instance($result->tlsExpiresAt)->utc();
-                    $monitor->tls_last_checked_at = $checkedAt;
+                    $updateAttributes['tls_expires_at'] = CarbonImmutable::instance($result->tlsExpiresAt)->utc()->format('Y-m-d H:i:s');
+                    $updateAttributes['tls_last_checked_at'] = $formattedCheckedAt;
                 } elseif ($snapshot->scheme === 'http') {
-                    $monitor->tls_expires_at = null;
-                    $monitor->tls_last_checked_at = null;
+                    $updateAttributes['tls_expires_at'] = null;
+                    $updateAttributes['tls_last_checked_at'] = null;
                 }
 
-                $monitor->save();
+                // Compare-and-swap against persisted revision prevents TOCTOU races on both SQLite and MySQL.
+                $updatedRows = Monitor::query()
+                    ->whereKey($monitor->getKey())
+                    ->where('revision', $snapshot->revision)
+                    ->where('is_active', true)
+                    ->where('status', '!=', MonitorStatus::PAUSED->value)
+                    ->update($updateAttributes);
 
-                // Update locked collection snapshot if the same monitor appeared multiple times defensively.
+                if ($updatedRows !== 1) {
+                    $staleDiscarded++;
+
+                    continue;
+                }
+
                 $snapshotCheckStatus = $result->succeeded ? CheckResultStatus::SUCCESS : CheckResultStatus::FAILURE;
 
                 $checkRows[] = [
@@ -113,7 +130,7 @@ final class CheckBatchPersister
                         : self::sanitizeErrorMessage($result->errorMessage),
                     'redirects_followed' => max(0, $result->redirectsFollowed),
                     'body_truncated' => $result->bodyTruncated,
-                    'checked_at' => $checkedAt->format('Y-m-d H:i:s'),
+                    'checked_at' => $formattedCheckedAt,
                 ];
 
                 $persisted++;

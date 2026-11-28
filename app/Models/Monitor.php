@@ -49,6 +49,42 @@ class Monitor extends Model
     public const DEFAULT_EXPECTED_STATUS_MAX = 299;
 
     /**
+     * Initialize and monotonically increment persistent monitor revision on configuration or state changes.
+     */
+    protected static function booted(): void
+    {
+        static::creating(static function (self $monitor): void {
+            if ($monitor->revision === null || (int) $monitor->revision < 1) {
+                $monitor->revision = 1;
+            }
+        });
+
+        static::updating(static function (self $monitor): void {
+            if ($monitor->isDirty([
+                'name',
+                'url',
+                'check_interval_minutes',
+                'timeout_seconds',
+                'expected_status_code_min',
+                'expected_status_code_max',
+                'is_active',
+                'status',
+                'consecutive_failures',
+                'consecutive_successes',
+                'last_checked_at',
+                'next_check_at',
+                'last_status_code',
+                'last_latency_ms',
+                'tls_expires_at',
+                'tls_last_checked_at',
+            ])) {
+                $current = (int) ($monitor->getOriginal('revision') ?? $monitor->revision ?? 1);
+                $monitor->revision = max(1, $current) + 1;
+            }
+        });
+    }
+
+    /**
      * Get the single site owner associated with this monitor.
      *
      * @return BelongsTo<User, $this>
@@ -186,6 +222,7 @@ class Monitor extends Model
             'last_latency_ms' => 'integer',
             'tls_expires_at' => 'datetime',
             'tls_last_checked_at' => 'datetime',
+            'revision' => 'integer',
         ];
     }
 }

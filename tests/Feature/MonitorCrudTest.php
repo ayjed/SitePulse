@@ -80,6 +80,7 @@ test('monitors schema defines required columns, composite indexes, foreign keys,
         'last_latency_ms',
         'tls_expires_at',
         'tls_last_checked_at',
+        'revision',
         'created_at',
         'updated_at',
     ]))->toBeTrue();
@@ -99,13 +100,14 @@ test('monitors schema defines required columns, composite indexes, foreign keys,
     $owner->delete();
     expect(Monitor::query()->count())->toBe(0);
 
-    // Verify migration rollback & re-apply roundtrip in FK-safe order (check_results -> monitors_default -> monitors).
-    Artisan::call('migrate:rollback', ['--step' => 3, '--no-interaction' => true]);
+    // Verify migration rollback & re-apply roundtrip in FK-safe order (revision -> check_results -> monitors_default -> monitors).
+    Artisan::call('migrate:rollback', ['--step' => 4, '--no-interaction' => true]);
     expect(Schema::hasTable('check_results'))->toBeFalse()
         ->and(Schema::hasTable('monitors'))->toBeFalse();
 
     Artisan::call('migrate', ['--no-interaction' => true]);
     expect(Schema::hasTable('monitors'))->toBeTrue()
+        ->and(Schema::hasColumn('monitors', 'revision'))->toBeTrue()
         ->and(Schema::hasTable('check_results'))->toBeTrue();
 });
 

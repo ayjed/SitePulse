@@ -7,12 +7,15 @@ use App\Models\Monitor;
 use App\Models\User;
 use App\Support\Monitoring\CheckBatchPersister;
 use App\Support\Monitoring\MonitorCheckRunner;
+use App\Support\Monitoring\MonitorProbeSnapshot;
 use App\Support\Monitoring\MonitorStateTransition;
 use App\Support\SafeHttp\Contracts\DnsResolverInterface;
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
 use App\Support\SafeHttp\Contracts\MultiTransportDriverInterface;
+use App\Support\SafeHttp\NativeDnsResolver;
 use App\Support\SafeHttp\SafeHttpClient;
 use App\Support\SafeHttp\SafeHttpFailureReason;
+use App\Support\SafeHttp\SafeHttpRequestException;
 use App\Support\SafeHttp\TransportRequest;
 use App\Support\SafeHttp\TransportResponse;
 use Carbon\CarbonImmutable;
@@ -185,7 +188,7 @@ test('SCHED-03 & migration: upgrades unchecked monitors to unknown, orders due c
     $tempUser = User::factory()->owner()->create();
     $tempUserId = $tempUser->id;
 
-    Artisan::call('migrate:rollback', ['--step' => 2, '--no-interaction' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 3, '--no-interaction' => true]);
 
     $uncheckedId = DB::table('monitors')->insertGetId([
         'user_id' => $tempUserId,
@@ -662,4 +665,279 @@ test('benchmarks 50-monitor batch persistence on SQLite WAL within tight memory 
     }
 
     Carbon::setTestNow();
+});
+
+test('whole-run monotonic deadline accounts for setup/selection overhead without resetting budget inside checkBatch', function () {
+    Carbon::setTestNow(Carbon::parse('2026-11-27 12:00:00', 'UTC'));
+
+    try {
+        $owner = User::factory()->owner()->create();
+        $m1 = Monitor::factory()->for($owner)->create(['url' => 'https://run1.example.test/']);
+        $m2 = Monitor::factory()->for($owner)->create(['url' => 'https://run2.example.test/']);
+
+        // Case A: Clock advances past 45s soft deadline during initial lock/selection before checkBatch runs.
+        $selectionCalls = 0;
+        $clockPreBatch = static function () use (&$selectionCalls): int {
+            $selectionCalls++;
+
+            // First call captures run start (t=0s); subsequent check after dueForCheck()->get() sees t=46s.
+            return $selectionCalls === 1 ? 1_000_000_000_000 : 1_046_000_000_000;
+        };
+
+        $httpProbes = 0;
+        $clientA = new SafeHttpClient(
+            dnsResolver: new class implements DnsResolverInterface
+            {
+                public function resolve(string $hostname): array
+                {
+                    return ['93.184.216.34'];
+                }
+            },
+            transport: new class($httpProbes) implements HttpTransportInterface
+            {
+                public function __construct(private int &$count) {}
+
+                public function send(TransportRequest $request): TransportResponse
+                {
+                    $this->count++;
+
+                    return makeOkTransportResponse();
+                }
+            },
+            monotonicClockNs: $clockPreBatch,
+        );
+
+        $runnerA = new MonitorCheckRunner($clientA, new CheckBatchPersister, $clockPreBatch);
+        $reportA = $runnerA->run(concurrency: 1);
+
+        expect($reportA->lockAcquired)->toBeTrue()
+            ->and($reportA->dueCount)->toBe(2)
+            ->and($reportA->startedCount)->toBe(0)
+            ->and($reportA->softDeadlineSkippedCount)->toBe(2)
+            ->and($reportA->softDeadlineReached)->toBeTrue()
+            ->and($httpProbes)->toBe(0)
+            ->and($m1->fresh()->status)->toBe(MonitorStatus::UNKNOWN)
+            ->and($m2->fresh()->status)->toBe(MonitorStatus::UNKNOWN);
+
+        // Case B: 25s spent before checkBatch + 21s inside first check = 46s total >= 45s soft deadline; $m2 deferred.
+        $nowNs = 2_000_000_000_000;
+        $readCount = 0;
+        $clockShared = static function () use (&$nowNs, &$readCount): int {
+            $readCount++;
+            if ($readCount === 2) {
+                $nowNs += 25_000_000_000; // simulate 25s selection/setup overhead before checkBatch
+            }
+
+            return $nowNs;
+        };
+
+        $clientB = new SafeHttpClient(
+            dnsResolver: new class implements DnsResolverInterface
+            {
+                public function resolve(string $hostname): array
+                {
+                    return ['93.184.216.34'];
+                }
+            },
+            transport: new class($nowNs) implements HttpTransportInterface
+            {
+                public function __construct(private int &$nowNs) {}
+
+                public function send(TransportRequest $request): TransportResponse
+                {
+                    $this->nowNs += 21_000_000_000; // cumulative run elapsed now 46s > 45s
+
+                    return makeOkTransportResponse();
+                }
+            },
+            monotonicClockNs: $clockShared,
+        );
+
+        $runnerB = new MonitorCheckRunner($clientB, new CheckBatchPersister, $clockShared);
+        $reportB = $runnerB->run(concurrency: 1);
+
+        expect($reportB->dueCount)->toBe(2)
+            ->and($reportB->completedCount)->toBe(1)
+            ->and($reportB->softDeadlineSkippedCount)->toBe(1)
+            ->and($reportB->softDeadlineReached)->toBeTrue()
+            ->and($m1->fresh()->status)->toBe(MonitorStatus::OPERATIONAL)
+            ->and($m2->fresh()->status)->toBe(MonitorStatus::UNKNOWN);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
+test('NativeDnsResolver enforces deadline checks before and between split A/AAAA lookups without partial SSRF bypasses', function () {
+    $nowNs = 1_000_000_000_000;
+    $clock = static function () use (&$nowNs): int {
+        return $nowNs;
+    };
+
+    $lookupCalls = [];
+    $resolver = new NativeDnsResolver(
+        monotonicClockNs: $clock,
+        recordLookup: static function (string $host, int $type) use (&$nowNs, &$lookupCalls): array|false {
+            $lookupCalls[] = $type;
+
+            if ($type === (DNS_A + DNS_AAAA)) {
+                return false;
+            }
+
+            if ($type === DNS_A) {
+                // Stall during DNS_A past deadline before DNS_AAAA can be queried.
+                $nowNs += 5_000_000_000;
+
+                return [['ip' => '93.184.216.34']];
+            }
+
+            return [['ipv6' => '::1']];
+        },
+    );
+
+    // 1) Already expired before any query -> 0 OS lookups executed.
+    expect(fn () => $resolver->resolveWithDeadline('example.test', $nowNs))
+        ->toThrow(SafeHttpRequestException::class, 'prior to DNS resolution');
+    expect($lookupCalls)->toBe([]);
+
+    // 2) Deadline expires between DNS_A and DNS_AAAA -> fails closed instead of connecting via unchecked IPv4 alone.
+    expect(fn () => $resolver->resolveWithDeadline('example.test', $nowNs + 2_000_000_000))
+        ->toThrow(SafeHttpRequestException::class, 'split AAAA DNS fallback');
+    expect($lookupCalls)->toBe([DNS_A + DNS_AAAA, DNS_A]);
+
+    // 3) Hanging synchronous DNS pushing run past 50s hard deadline cancels target without false failure marks.
+    Carbon::setTestNow(Carbon::parse('2026-11-27 12:00:00', 'UTC'));
+    try {
+        $owner = User::factory()->owner()->create();
+        $slowDns = Monitor::factory()->for($owner)->create(['url' => 'https://slow-dns.example.test/']);
+        $queued = Monitor::factory()->for($owner)->create(['url' => 'https://next.example.test/']);
+
+        $runNow = 3_000_000_000_000;
+        $runClock = static function () use (&$runNow): int {
+            return $runNow;
+        };
+
+        $hangingDnsResolver = new NativeDnsResolver(
+            monotonicClockNs: $runClock,
+            recordLookup: static function () use (&$runNow): array|false {
+                $runNow += 52_000_000_000; // synchronous OS call hung past 50s hard deadline
+
+                return [['ip' => '93.184.216.34']];
+            },
+        );
+
+        $client = new SafeHttpClient(
+            dnsResolver: $hangingDnsResolver,
+            transport: new class implements HttpTransportInterface
+            {
+                public function send(TransportRequest $request): TransportResponse
+                {
+                    throw new RuntimeException('HTTP transport should not execute after DNS exceeded hard deadline.');
+                }
+            },
+            monotonicClockNs: $runClock,
+        );
+
+        $runner = new MonitorCheckRunner($client, new CheckBatchPersister, $runClock);
+        $report = $runner->run(concurrency: 1);
+
+        expect($report->completedCount)->toBe(0)
+            ->and($report->hardDeadlineCancelledCount)->toBe(1)
+            ->and($report->softDeadlineSkippedCount)->toBe(1)
+            ->and($report->hardDeadlineReached)->toBeTrue()
+            ->and($slowDns->fresh()->status)->toBe(MonitorStatus::UNKNOWN)
+            ->and($queued->fresh()->status)->toBe(MonitorStatus::UNKNOWN)
+            ->and(CheckResult::query()->count())->toBe(0);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
+test('persistent monitor revision rejects same-second config edits, edit-reversions, and pause-resume reversals cleanly', function () {
+    Carbon::setTestNow(Carbon::parse('2026-11-27 12:00:00', 'UTC'));
+
+    try {
+        $owner = User::factory()->owner()->create();
+
+        // Revision is protected against mass assignment and initializes at 1.
+        $direct = new Monitor(['name' => 'Rev Test', 'url' => 'https://rev.example.test/', 'revision' => 999]);
+        $direct->user()->associate($owner);
+        $direct->save();
+        expect($direct->revision)->toBe(1);
+
+        $revertedMonitor = Monitor::factory()->for($owner)->create([
+            'url' => 'https://reverted.example.test/health',
+            'timeout_seconds' => 10,
+            'check_interval_minutes' => 5,
+        ]);
+        $pausedResumedMonitor = Monitor::factory()->for($owner)->create([
+            'url' => 'https://pause-resume.example.test/health',
+        ]);
+        $cleanSurvivor = Monitor::factory()->for($owner)->create([
+            'url' => 'https://clean-rev.example.test/health',
+        ]);
+
+        // Pre-capture exact same-second snapshot timestamp for all 3 monitors (12:00:00 UTC).
+        bindFakeEngine(function (TransportRequest $request) use ($revertedMonitor, $pausedResumedMonitor): TransportResponse {
+            $host = $request->url->host;
+
+            if ($host === 'reverted.example.test') {
+                // Edit timeout 10 -> 15 then immediately revert 15 -> 10 within the EXACT same second (12:00:00).
+                $revertedMonitor->timeout_seconds = 15;
+                $revertedMonitor->save();
+
+                $revertedMonitor->timeout_seconds = 10;
+                $revertedMonitor->save();
+            } elseif ($host === 'pause-resume.example.test') {
+                // Pause then immediately resume back into UNKNOWN within the EXACT same second (12:00:00).
+                $pausedResumedMonitor->pause();
+                $pausedResumedMonitor->resume();
+            }
+
+            return makeOkTransportResponse();
+        });
+
+        $report = app(MonitorCheckRunner::class)->run(concurrency: 1);
+
+        expect($report->dueCount)->toBe(4) // $direct + 3 above
+            ->and($report->completedCount)->toBe(2) // $direct + $cleanSurvivor
+            ->and($report->staleDiscardedCount)->toBe(2)
+            ->and($revertedMonitor->fresh()->status)->toBe(MonitorStatus::UNKNOWN)
+            ->and($revertedMonitor->fresh()->revision)->toBe(3)
+            ->and($revertedMonitor->fresh()->last_checked_at)->toBeNull()
+            ->and($pausedResumedMonitor->fresh()->status)->toBe(MonitorStatus::UNKNOWN)
+            ->and($pausedResumedMonitor->fresh()->revision)->toBe(3)
+            ->and($pausedResumedMonitor->fresh()->last_checked_at)->toBeNull()
+            ->and($cleanSurvivor->fresh()->status)->toBe(MonitorStatus::OPERATIONAL)
+            ->and($cleanSurvivor->fresh()->revision)->toBe(2)
+            ->and(CheckResult::query()->where('monitor_id', $revertedMonitor->id)->count())->toBe(0)
+            ->and(CheckResult::query()->where('monitor_id', $pausedResumedMonitor->id)->count())->toBe(0);
+
+        // Verify direct snapshot reuse fails atomic compare-and-swap too after survivor already moved to revision=2.
+        $staleSnapshot = new MonitorProbeSnapshot(
+            monitorId: $cleanSurvivor->id,
+            url: $cleanSurvivor->url,
+            scheme: 'https',
+            checkIntervalMinutes: $cleanSurvivor->check_interval_minutes,
+            timeoutSeconds: $cleanSurvivor->timeout_seconds,
+            expectedStatusCodeMin: $cleanSurvivor->expected_status_code_min,
+            expectedStatusCodeMax: $cleanSurvivor->expected_status_code_max,
+            initialStatus: MonitorStatus::UNKNOWN,
+            initialConsecutiveFailures: 0,
+            initialConsecutiveSuccesses: 0,
+            revision: 1,
+            updatedAtTimestamp: Carbon::parse('2026-11-27 12:00:00', 'UTC')->getTimestamp(),
+        );
+
+        $casResult = app(CheckBatchPersister::class)->persistBatch([[
+            'snapshot' => $staleSnapshot,
+            'result' => app(SafeHttpClient::class)->check($cleanSurvivor->url),
+            'checkedAt' => CarbonImmutable::parse('2026-11-27 12:00:00', 'UTC'),
+        ]]);
+
+        expect($casResult['persisted'])->toBe(0)
+            ->and($casResult['staleDiscarded'])->toBe(1)
+            ->and($cleanSurvivor->fresh()->revision)->toBe(2);
+    } finally {
+        Carbon::setTestNow();
+    }
 });

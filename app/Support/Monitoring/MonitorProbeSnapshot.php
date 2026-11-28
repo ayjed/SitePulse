@@ -6,7 +6,7 @@ use App\Enums\MonitorStatus;
 use App\Models\Monitor;
 
 /**
- * Immutable snapshot of monitor configuration and state captured immediately before probing.
+ * Immutable snapshot of monitor configuration, state, and persistent revision captured before probing.
  */
 final readonly class MonitorProbeSnapshot
 {
@@ -21,6 +21,7 @@ final readonly class MonitorProbeSnapshot
         public MonitorStatus $initialStatus,
         public int $initialConsecutiveFailures,
         public int $initialConsecutiveSuccesses,
+        public int $revision,
         public ?int $updatedAtTimestamp,
     ) {}
 
@@ -39,16 +40,21 @@ final readonly class MonitorProbeSnapshot
             initialStatus: $monitor->status,
             initialConsecutiveFailures: (int) $monitor->consecutive_failures,
             initialConsecutiveSuccesses: (int) $monitor->consecutive_successes,
+            revision: max(1, (int) ($monitor->revision ?? 1)),
             updatedAtTimestamp: $monitor->updated_at?->utc()->getTimestamp(),
         );
     }
 
     /**
-     * Determine whether a locked database row still matches this pre-flight snapshot and remains active.
+     * Determine whether a locked database row still matches this pre-flight snapshot, revision, and active state.
      */
     public function matchesLockedMonitor(Monitor $lockedMonitor): bool
     {
         if (! $lockedMonitor->is_active || $lockedMonitor->status === MonitorStatus::PAUSED) {
+            return false;
+        }
+
+        if ((int) ($lockedMonitor->revision ?? 0) !== $this->revision) {
             return false;
         }
 

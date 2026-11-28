@@ -1,6 +1,6 @@
 # Phase 03 — Dashboard
 
-**Status:** IN PROGRESS (P03-01 merged, P03-02 authorized by the maintainer)
+**Status:** IN PROGRESS (P03-01 and P03-02 merged, P03-03 authorized by the maintainer)
 
 ## P03-01 — Authorized Status Overview
 
@@ -27,7 +27,7 @@ Desktop and mobile overview captures use synthetic preview data and are preserve
 - **Latency samples.** The newest 60 recorded check rows are returned with ID, timestamp, and latency. Missing latency stays `null` and measured zero remains `0`.
 - **Incidents.** History includes open and resolved incidents with optional status filtering. The service uses stored start, resolution, cause, and final duration. Open incidents have no final duration. History reads use the existing schema and retention behavior.
 
-Local verification on Windows PHP 8.4 / SQLite passed with 316 tests and 2,174 assertions, including 12 history tests and 116 assertions. Git whitespace checks, Composer strict validation, lockfile platform requirements and audit, Pint, `npm ci`, and the production build passed. The dashboard detail UI and Phase 03 exit criteria remain pending.
+Local verification on Windows PHP 8.4 / SQLite passed with 316 tests and 2,174 assertions, including 12 history tests and 116 assertions. Git whitespace checks, Composer strict validation, lockfile platform requirements and audit, Pint, `npm ci`, and the production build passed. PR #11 was squash-merged at `91169b7a6f26981df49eb48f90838424c097f372` after the three required CI jobs passed with 316 tests and 2,180 assertions each. [P03-02 CI](https://github.com/ayjed/SitePulse/actions/runs/46150396892)
 
 ### Retained-history benchmark
 
@@ -58,9 +58,34 @@ PHP's peak live memory during the measured reads, including the booted applicati
 
 The timings describe an isolated, warm workload. The uptime aggregate scans eligible outcomes for one monitor over the widest time window, so time grows with that monitor's retained sample count. No schema change is needed for the measured workload.
 
+## P03-03 — Monitor Detail and Visualization
+
+The existing authorized monitor route now shows current status and configuration, the last recorded check, 24-hour, 7-day and 30-day observed-check uptime, recent latency, and paginated check and incident history. Existing edit, pause, resume and delete actions use their original routes. The layout follows the existing Tailwind palette and status badges in both themes.
+
+The component uses one locked UTC reference time for all four history reads. Manual refresh advances it and resets both pages. Check time and incident start time are bounded by that reference. Current monitor state and incident resolution fields reflect the latest persisted records. Uptime shows completed-check sample counts, a separate “No data” state, and a distinct `0%` result. A non-perfect value that rounds to 100% displays `>99.99%`. History continues to be associated with the monitor after a URL edit.
+
+The native SVG plots up to 60 check samples oldest first, with horizontal spacing proportional to UTC elapsed time. Only measured latency produces a point. The chart uses milliseconds, includes its actual recorded range, and offers a keyboard-expandable data table with every sample, including missing and zero values. It does not connect points across missing data. Incident history distinguishes ongoing time at the reference timestamp from recorded final duration.
+
+Livewire signs the model identity and keeps its ID, reference, filters and cursor state locked. The existing policy authorizes the monitor before reads or component actions. Each history page displays at most 25 rows. Cursor signatures bind the token to monitor ID, UTC reference, history type and incident filter. The server checks size, type, encoding, structure, timestamp, ID and direction before accepting a cursor. A filter change clears the incident cursor, and an invalid token lands on the first page in its own history. Responses use private/no-store directives. Blade escapes names and recorded incident causes, and the check history does not include raw error messages.
+
+Browser smoke verification used a disposable SQLite fixture and the built stylesheet, with preview-only light and dark media overrides. At approximately 1440, 768 and 375 pixels, the page had no horizontal overflow. Keyboard activation retained visible focus after Refresh history, expanded the latency table, and recovered from a synthetic query error. Check pagination and the Open incident filter were also exercised. Synthetic screenshots are Git-ignored under `storage/app/private/monitor-detail-*.jpg`. Formal WCAG assessment is pending.
+
+Local PHP 8.4 / SQLite verification passed with 334 tests and 2,332 assertions, including 18 monitor detail tests and 158 assertions. Git whitespace checks, Composer strict validation, lockfile platform requirements and audit, Pint, `npm ci`, and the production build passed. The protected update, cursor, data accuracy, and bounded read tests use the same suite in the existing SQLite and MySQL 8.0 CI matrix.
+
+### Combined detail request benchmark
+
+A loopback PHP 8.4.28 development server used an isolated SQLite 3.54.1 WAL database with 432,000 synthetic checks across ten monitored endpoints and 320 incidents. A synthetic owner used the real session-authenticated detail route and sent a signed Livewire refresh update. Each operation had one warm-up and 25 measured requests. The PHP timer covered Laravel bootstrap, middleware, queries and response rendering. The SQL timer combined observed statement times. Uncompressed response bytes include the complete HTML or Livewire JSON body.
+
+| Operation | SQL statements | Uptime aggregates | SQL p50 (ms) | Server p50 (ms) | Server p95 (ms) | Response bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| authenticated HTML GET | 10 | 1 | 83.34 | 430.086 | 455.790 | 105,735 |
+| Livewire refresh POST | 11 | 1 | 83.70 | 429.387 | 448.084 | 105,098 |
+
+The data path issued five monitor lookups, three check queries and one incident query per request. HTTP authentication added one user lookup. The Livewire endpoint added one cache-table query with the default database cache store. PHP reserved up to 31,457,280 bytes during both operations. The measured cost is local server-side timing, with no network or browser rendering measurement. The uptime scan still grows with the number of eligible recorded checks for the monitor. The previous engine-level MySQL and SQLite benchmarks remain applicable to the unchanged MonitorHistory queries.
+
 ## Scope
 - [x] Monitor list and status overview.
-- [ ] Check history, incident details and response times.
+- [x] Check history, incident details and response times.
 - [ ] Responsive mobile and desktop layouts.
 - [ ] Accessible interaction and empty/error states.
 - [ ] Browser smoke tests.

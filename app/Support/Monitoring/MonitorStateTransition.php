@@ -15,6 +15,22 @@ final class MonitorStateTransition
     public const RECOVERY_THRESHOLD = 2;
 
     /**
+     * Determine whether a transition confirmed a new outage (N=2 consecutive failures).
+     */
+    public static function isConfirmedOutage(MonitorStatus $previousStatus, MonitorStatus $nextStatus): bool
+    {
+        return $previousStatus === MonitorStatus::PENDING_DOWN && $nextStatus === MonitorStatus::DOWN;
+    }
+
+    /**
+     * Determine whether a transition confirmed recovery (M=2 consecutive successes from outage).
+     */
+    public static function isConfirmedRecovery(MonitorStatus $previousStatus, MonitorStatus $nextStatus): bool
+    {
+        return $previousStatus === MonitorStatus::PENDING_RECOVERY && $nextStatus === MonitorStatus::OPERATIONAL;
+    }
+
+    /**
      * Advance monitor health state based on a completed check outcome.
      */
     public function apply(

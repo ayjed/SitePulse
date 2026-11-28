@@ -2,6 +2,8 @@
 
 use App\Console\Commands\CheckMonitorsCommand;
 use App\Console\Commands\CreateOwnerCommand;
+use App\Console\Commands\DispatchNotificationsCommand;
+use App\Console\Commands\PruneChecksCommand;
 use App\Http\Middleware\ApplySecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -16,6 +18,8 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withCommands([
         CreateOwnerCommand::class,
         CheckMonitorsCommand::class,
+        DispatchNotificationsCommand::class,
+        PruneChecksCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->web(append: [

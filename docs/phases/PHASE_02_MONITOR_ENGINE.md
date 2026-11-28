@@ -2,21 +2,21 @@
 
 **Status:** IN PROGRESS
 
-**Authorized:** `2026-11-27` following maintainer approval of Phase 01 (PR #1 `d3d7ffc`, PR #2 `776333f`, PR #3 `12dbd17`), PR #4 Task 12 merge (`d1d85b8`), and PR #5 Task 13 merge (`0f29c215`).
+**Authorized:** `2026-11-27` following maintainer approval of Phase 01 (PR #1 `d3d7ffc`, PR #2 `776333f`, PR #3 `12dbd17`), PR #4 Task 12 merge (`d1d85b8`), PR #5 Task 13 merge (`0f29c215`), and PR #6 Task 14 merge (`57ed871e`).
 
-**Current task:** Task 14 — Scheduled Monitoring Engine (`feat/phase-02-scheduled-engine`, **IN REVIEW**).
+**Current task:** Task 15 — Incident Lifecycle, Alert Deduplication & History Retention (`feat/phase-02-incidents-retention`, **IN REVIEW**).
 
 ## Scope
 - [x] Monitor CRUD and safe configuration validation (Task 13 **MERGED** via PR #5 `0f29c215573a64786c64208cad2e64b2210e68fd`).
-- [x] Periodic CLI checker and concurrency control (`sitepulse:check-monitors`, `MonitorCheckRunner`, `CurlMultiTransportDriver`, Task 14 **IN REVIEW**; Incident/alert dispatch stays scoped to Task 15).
-- [ ] Store status, latency and incidents (`check_results` & `MonitorStatus` $N=2$/$M=2$ implemented in Task 14; `incidents` table & notifications pending Task 15).
-- [x] Strong outbound request policy resistant to SSRF (`SafeHttpClient` foundation merged in Task 12 `d1d85b8`; bounded `checkBatch` integration added in Task 14).
-- [ ] Unit/integration/security tests (`SEC-01`–`SEC-16` `Security`, `MonitorCrudTest`, `ScheduledMonitoringEngineTest`, and loopback `SafeHttpCurlIntegrationTest` implemented; Task 15 incident & pruning tests pending).
+- [x] Periodic CLI checker and concurrency control (`sitepulse:check-monitors`, `MonitorCheckRunner`, `CurlMultiTransportDriver`, Task 14 **MERGED** via PR #6 `57ed871e06408b6faf748cd86e2a142f821bf099`).
+- [x] Store status, latency and incidents (`check_results` in Task 14; `incidents`, `incident_notifications`, outbox delivery, TLS expiry alerts & history pruning implemented in Task 15 **IN REVIEW**).
+- [x] Strong outbound request policy resistant to SSRF (`SafeHttpClient` foundation merged in Task 12 `d1d85b8`; bounded `checkBatch` integration merged in Task 14 `57ed871e`).
+- [x] Unit/integration/security tests (`SEC-01`–`SEC-16` `Security`, `MonitorCrudTest`, `ScheduledMonitoringEngineTest`, `SafeHttpCurlIntegrationTest`, `IncidentLifecycleAndAlertsTest` `STATE-01`–`STATE-05`, and `HistoryPruningTest` implemented).
 
 ## Exit criteria
-- [ ] Monitoring scenarios verified with repeatable tests (`SCHED-01`–`SCHED-06` and loopback HTTP/HTTPS `curl_multi` checks added; full Phase 02 sign-off awaits Task 15 & CI matrix).
+- [x] Monitoring scenarios verified with repeatable tests (`SCHED-01`–`SCHED-06`, loopback `curl_multi`, `STATE-01`–`STATE-05`, crash/retry/TLS/pruning suites verified locally; pending final CI & maintainer review).
 - [x] Private network bypass attempts blocked (`SEC-01`–`SEC-16` passing and verified in concurrent loopback `checkBatch` redirect checks).
-- [ ] Failed cron/checks are observable (`check_results` persistence and sanitized logs implemented in Task 14; dashboard & incident UI/alerts arrive in Task 15 / Phase 03).
+- [x] Failed cron/checks are observable (`check_results`, `incidents`, `incident_notifications`, sanitized logs, and escaped alert emails implemented; dashboard UI arrives in Phase 03).
 - [ ] Maintainer approves evidence.
 
 ## Task 12 — Safe HTTP Client Foundation (`MERGED` via PR #4: `d1d85b8ceae988c36013f3220657a9ed873f3987`)
@@ -39,8 +39,8 @@
   - `App\Rules\SafeMonitorUrl` & `App\Http\Requests\MonitorConfigurationRequest` (validates URLs via `SafeHttpClient::validateUrl()` with zero DNS/HTTP probes, normalizes canonical URLs, enforces intervals `{1, 5, 10, 15, 30, 60}`, timeouts `2–15`, expected HTTP status codes `100–599` with `max >= min`, rejects control chars/arrays/booleans, and suppresses credential old-input flashing on invalid URLs)
   - `App\Http\Controllers\MonitorController` & minimal accessible Tailwind Blade UI (`resources/views/monitors/*`, `resources/views/partials/owner-header.blade.php`, updated `resources/views/dashboard.blade.php`), inheriting `no-store` cache and CSP security headers without enabling cron jobs or live network probes.
 
-## Task 14 — Scheduled Monitoring Engine (`IN REVIEW`)
-- **Branch:** `feat/phase-02-scheduled-engine` (from `origin/main` at `0f29c215573a64786c64208cad2e64b2210e68fd`)
+## Task 14 — Scheduled Monitoring Engine (`MERGED` via PR #6: `57ed871e06408b6faf748cd86e2a142f821bf099`)
+- **Merged SHA:** `57ed871e06408b6faf748cd86e2a142f821bf099` (PR #6 merged into `main`).
 - **Unchecked State, Revisions & Persistence:**
   - `App\Enums\MonitorStatus::UNKNOWN` (`'unknown'`) for newly created, resumed, or URL-reset active monitors so monitors never claim `operational` prior to a completed successful probe, upgraded safely via `database/migrations/2026_11_27_000003_update_monitors_default_status_to_unknown.php` (preserving checked and paused monitors)
   - `database/migrations/2026_11_28_000005_add_revision_to_monitors_table.php` adding a persistent `monitors.revision` counter incremented monotonically on Eloquent configuration/state updates (`Monitor::booted()`) and atomically compare-and-swapped inside `CheckBatchPersister` (`where('id', ...)->where('revision', ...)`), defeating same-second edit/revert and pause/resume TOCTOU races across SQLite and MySQL
@@ -52,4 +52,23 @@
 - **Automated Verification (`Unit`, `Feature`, `Security`, `Integration`):**
   - `tests/Feature/ScheduledMonitoringEngineTest.php` (`SCHED-01`–`SCHED-06`, migration `000003` upgrade check, database overlap lock & crash TTL recovery, stale-race guards, log sanitization, and 50-monitor SQLite WAL batch persistence)
   - `tests/Integration/SafeHttpCurlIntegrationTest.php` & `tests/Support/LoopbackTestServer.php` (isolated loopback HTTP/HTTPS `curl_multi` concurrency, `CURLOPT_RESOLVE` DNS pinning, ECDSA SHA-256 TLS verification & expiry extraction, SSRF/loop/redirect/body-cap checks, and hard-deadline handle cancellation without production SSRF bypass flags)
-  - Draft PR pending remote CI matrix (`PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, `PHP 8.3 / MySQL 8.0`) & independent review; Task 15 (incidents, alert emails, and daily pruning) remains unstarted and Phase 02 remains **IN PROGRESS**.
+
+## Task 15 — Incident Lifecycle, Alert Deduplication & History Retention (`IN REVIEW`)
+- **Branch:** `feat/phase-02-incidents-retention` (from `origin/main` at `57ed871e06408b6faf748cd86e2a142f821bf099`)
+- **SQLite & MySQL-Compatible Incident & Notification Outbox Schema:**
+  - `database/migrations/2026_11_28_000006_add_tls_warning_tracking_to_monitors_table.php` (`tls_warning_expires_at`, `tls_warning_cycle`)
+  - `database/migrations/2026_11_28_000007_create_incidents_table.php` (`open_monitor_id` nullable unique lock column enforcing single open incident per monitor portably across SQLite and MySQL 8.0+)
+  - `database/migrations/2026_11_28_000008_create_incident_notifications_table.php` (durable outbox with `UNIQUE(event_key)`, composite `UNIQUE(incident_id, type)`, cryptographic `claim_token`, and monotonically incremented `claim_version` fencing, allowing multiple `NULL`-incident TLS warnings while guaranteeing at-most-once `down`/`recovery` alert records per incident)
+  - `App\Enums\IncidentStatus`, `App\Enums\IncidentNotificationType`, `App\Enums\NotificationDeliveryStatus`, `App\Models\Incident`, `App\Models\IncidentNotification`, and updated `App\Models\Monitor` + `App\Http\Controllers\MonitorController` (silent open-incident closure on pause/resume/URL change; FK cascade on delete)
+- **Incident Lifecycle, Decoupled Fenced Outbox Delivery, & TLS Expiry Tracking:**
+  - `App\Support\Monitoring\CheckBatchPersister` & `MonitorCheckRunner`: opens incidents and queues `'down'` alerts on $N=2$ outage confirmation, resolves open incidents with `duration_seconds` and queues `'recovery'` alerts on $M=2$ recovery, ignores stale revisions, evaluates independent 14-day TLS expiry alerts (`tls_warning` deduplicated per warning episode and rearmed via `tls_warning_cycle` upon certificate renewal), and completes HTTP probe cycles cleanly without waiting on SMTP
+  - `App\Mail\SitePulseAlertMail` & Blade HTML/plain-text views (`resources/views/emails/sitepulse-alert*.blade.php`): strict HTML escaping, stripped single-line subjects, stripped URL userinfo/query tokens, sanitized errors
+  - `App\Support\Notifications\NotificationDispatcher` & `App\Console\Commands\DispatchNotificationsCommand` (`sitepulse:dispatch-notifications`): bounded work per pass (`--limit`, `--deadline` with `hrtime(true)` pre-claim checks; synchronous transport calls cannot be preempted mid-socket write and rely on the `<= 5s` SMTP socket timeout), dedicated overlap lock (`sitepulse:dispatch-notifications:execution`), independent opt-in gates (`SITEPULSE_ALERTS_ENABLED=false` & `SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED=false`), server-side verified owner recipient lookup only, atomic fenced claiming (`claim_token` + `claim_version`) strictly outside DB transactions/locks preventing stale workers from overwriting newer worker state, atomic fenced reconciliation of stale final-attempt `SENDING` claims into terminal `FAILED` without re-sending email, bounded exponential retry backoff, and stale-claim recovery (at-least-once SMTP crash window documented)
+- **Check-History Retention Pruning:**
+  - `App\Support\Monitoring\CheckHistoryPruner` & `App\Console\Commands\PruneChecksCommand` (`sitepulse:prune-checks`): portable PK-chunked deletion strictly older than `SITEPULSE_HISTORY_RETENTION_DAYS=30`, overlap lock protection, and full preservation of `incidents` and `incident_notifications`
+  - `routes/console.php`: daily `sitepulse:prune-checks` schedule gated behind opt-in `SITEPULSE_PRUNE_CHECKS_ENABLED=false` and every-minute `sitepulse:dispatch-notifications` gated behind `SITEPULSE_ALERTS_ENABLED=true && SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED=true`
+- **Automated Verification:**
+  - `tests/Feature/IncidentLifecycleAndAlertsTest.php` (`STATE-01`–`STATE-05`, SMTP failure/retry/crash recovery, stale check guards, pause/URL/delete cleanup, TLS 14d warning/renewal cycle, XSS/credential sanitization, owner-only recipients, `SITEPULSE_ALERTS_ENABLED=false` default)
+  - `tests/Feature/NotificationDispatchConcurrencyTest.php` (active claim contention, stale-worker completion & failure fencing, SMTP crash-window recovery, retry exhaustion, `MonitorCheckRunner`/SMTP decoupling, bounded `--limit`/`--deadline`, overlap lock, independent opt-ins & `config:cache` parity)
+  - `tests/Feature/HistoryPruningTest.php` (exact 30-day boundary, chunked SQLite/MySQL-portable deletion, incident/notification preservation, idempotency, CLI validation, overlap lock, opt-in daily schedule)
+  - Draft PR #7 pending remote CI (`PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, `PHP 8.3 / MySQL 8.0`) and independent review; Phase 02 remains **IN PROGRESS**.

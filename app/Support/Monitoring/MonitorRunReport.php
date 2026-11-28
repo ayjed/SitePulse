@@ -3,7 +3,7 @@
 namespace App\Support\Monitoring;
 
 /**
- * Bounded execution summary returned by MonitorCheckRunner::run().
+ * Immutable summary metrics for one bounded monitor check execution pass.
  */
 final readonly class MonitorRunReport
 {
@@ -20,5 +20,8 @@ final readonly class MonitorRunReport
         public int $elapsedMs,
         public bool $softDeadlineReached,
         public bool $hardDeadlineReached,
+        public int $incidentsOpenedCount = 0,
+        public int $incidentsResolvedCount = 0,
+        public int $notificationsQueuedCount = 0,
     ) {}
 }

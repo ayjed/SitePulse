@@ -179,6 +179,9 @@ final class MonitorCheckRunner
             $staleDiscardedCount = 0;
             $softDeadlineSkippedCount = 0;
             $hardDeadlineCancelledCount = 0;
+            $incidentsOpenedCount = 0;
+            $incidentsResolvedCount = 0;
+            $notificationsQueuedCount = 0;
 
             $flushBuffer = function () use (
                 &$buffer,
@@ -186,6 +189,9 @@ final class MonitorCheckRunner
                 &$succeededCount,
                 &$failedCount,
                 &$staleDiscardedCount,
+                &$incidentsOpenedCount,
+                &$incidentsResolvedCount,
+                &$notificationsQueuedCount,
             ): void {
                 if ($buffer === []) {
                     return;
@@ -196,6 +202,9 @@ final class MonitorCheckRunner
                 $succeededCount += $stats['succeeded'];
                 $failedCount += $stats['failed'];
                 $staleDiscardedCount += $stats['staleDiscarded'];
+                $incidentsOpenedCount += $stats['incidentsOpened'];
+                $incidentsResolvedCount += $stats['incidentsResolved'];
+                $notificationsQueuedCount += $stats['notificationsQueued'];
                 $buffer = [];
             };
 
@@ -260,6 +269,9 @@ final class MonitorCheckRunner
                 'stale_discarded_count' => $staleDiscardedCount,
                 'soft_deadline_skipped_count' => $softDeadlineSkippedCount,
                 'hard_deadline_cancelled_count' => $hardDeadlineCancelledCount,
+                'incidents_opened_count' => $incidentsOpenedCount,
+                'incidents_resolved_count' => $incidentsResolvedCount,
+                'notifications_queued_count' => $notificationsQueuedCount,
                 'concurrency' => $effectiveConcurrency,
                 'soft_deadline_reached' => $softDeadlineReached,
                 'hard_deadline_reached' => $hardDeadlineReached,
@@ -279,6 +291,9 @@ final class MonitorCheckRunner
                 elapsedMs: $elapsedMs,
                 softDeadlineReached: $softDeadlineReached,
                 hardDeadlineReached: $hardDeadlineReached,
+                incidentsOpenedCount: $incidentsOpenedCount,
+                incidentsResolvedCount: $incidentsResolvedCount,
+                notificationsQueuedCount: $notificationsQueuedCount,
             );
         } finally {
             try {

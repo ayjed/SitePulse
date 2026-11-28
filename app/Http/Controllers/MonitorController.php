@@ -9,6 +9,7 @@ use App\Support\SafeHttp\SafeHttpClient;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 
 /**
@@ -123,10 +124,15 @@ class MonitorController extends Controller
 
         $monitor->fill($normalized);
 
-        if ($monitor->url !== $previousUrl) {
-            $monitor->resetTelemetryForUrlChange($desiredActive);
-            $monitor->save();
-        } else {
+        DB::transaction(function () use ($monitor, $previousUrl, $previousInterval, $wasActive, $desiredActive): void {
+            if ($monitor->url !== $previousUrl) {
+                $monitor->resetTelemetryForUrlChange($desiredActive);
+                $monitor->save();
+                $monitor->resolveOpenIncidentSilently();
+
+                return;
+            }
+
             if ($monitor->check_interval_minutes !== $previousInterval && $monitor->last_checked_at !== null && $desiredActive) {
                 $monitor->next_check_at = $monitor->last_checked_at->copy()->addMinutes($monitor->check_interval_minutes);
             }
@@ -137,10 +143,12 @@ class MonitorController extends Controller
                 } else {
                     $monitor->pause();
                 }
-            } else {
-                $monitor->save();
+
+                return;
             }
-        }
+
+            $monitor->save();
+        });
 
         return redirect()
             ->route('monitors.show', $monitor)

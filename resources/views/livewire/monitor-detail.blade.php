@@ -74,7 +74,7 @@
         </p>
         <div class="flex flex-wrap items-center gap-3">
             <span wire:loading.delay role="status" class="text-sm text-stone-700 dark:text-stone-300">Loading history…</span>
-            <button type="button" x-on:click="runHistoryAction('refreshSnapshot')" x-bind:aria-disabled="historyPending" wire:loading.class="opacity-70" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 dark:border-stone-600 dark:hover:bg-stone-800">Refresh history</button>
+            <button type="button" x-on:click="runHistoryAction('refreshSnapshot')" x-bind:aria-disabled="historyPending.toString()" wire:loading.class="opacity-70" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 dark:border-stone-600 dark:hover:bg-stone-800">Refresh history</button>
         </div>
     </div>
 
@@ -116,14 +116,15 @@
             @if ($history['checks']->isEmpty())
                 <p class="border-t border-stone-200 px-4 py-5 text-sm text-stone-700 sm:px-6 dark:border-stone-800 dark:text-stone-300">{{ $checkCursor === '' ? 'No recorded checks yet.' : 'No checks on this page.' }}</p>
             @else
-                <table class="w-full table-fixed border-t border-stone-200 text-left text-sm dark:border-stone-800">
+                <div role="region" aria-label="Scrollable check results" tabindex="0" class="overflow-x-auto">
+                <table class="w-full min-w-[23rem] table-fixed border-t border-stone-200 text-left text-sm dark:border-stone-800">
                     <thead class="bg-stone-50 text-stone-700 dark:bg-stone-950/50 dark:text-stone-300">
                         <tr><th scope="col" class="w-[36%] py-2 pl-4 pr-1 sm:pl-6">Check (UTC)</th><th scope="col" class="py-2 pr-1">Outcome</th><th scope="col" class="w-[16%] py-2 pr-1">HTTP</th><th scope="col" class="w-[21%] py-2 pr-3">Latency</th></tr>
                     </thead>
                     <tbody class="divide-y divide-stone-200 dark:divide-stone-800">
                         @foreach ($history['checks'] as $check)
                             <tr wire:key="detail-check-{{ $check->id }}">
-                                <td class="py-3 pl-4 pr-1 tabular-nums sm:pl-6"><time datetime="{{ $check->checked_at->utc()->toIso8601String() }}"><span class="whitespace-nowrap">{{ $check->checked_at->utc()->format('M j, Y') }}</span> <span class="whitespace-nowrap">{{ $check->checked_at->utc()->format('H:i:s') }}</span></time></td>
+                                <td class="py-3 pl-4 pr-1 tabular-nums sm:pl-6"><time datetime="{{ $check->checked_at->utc()->toIso8601String() }}"><span class="wrap-anywhere">{{ $check->checked_at->utc()->format('M j, Y') }}</span> <span class="wrap-anywhere">{{ $check->checked_at->utc()->format('H:i:s') }}</span></time></td>
                                 <td class="py-3 pr-1 font-medium {{ $check->status === \App\Enums\CheckResultStatus::SUCCESS ? 'text-emerald-800 dark:text-emerald-300' : 'text-rose-800 dark:text-rose-300' }}">{{ $check->status->label() }}</td>
                                 <td class="py-3 pr-1 tabular-nums">{{ $check->status_code ?? '—' }}</td>
                                 <td class="py-3 pr-3 tabular-nums">{{ $check->latency_ms !== null ? number_format($check->latency_ms).' ms' : 'No data' }}</td>
@@ -131,6 +132,7 @@
                         @endforeach
                     </tbody>
                 </table>
+                </div>
             @endif
             <x-history-pagination kind="check" action="showChecks" :previous="$history['checkPrevious']" :next="$history['checkNext']" :away="$checkCursor !== ''" />
         </section>
@@ -140,7 +142,7 @@
                 <h2 id="incidents-heading" class="text-lg font-semibold">Incident history</h2>
                 <label class="flex flex-wrap items-center gap-2 text-sm font-medium" for="incident-filter">
                     Status
-                    <select id="incident-filter" x-on:change="runHistoryAction('filterIncidents', $el.value).finally(() => { $el.value = $wire.incidentFilter })" x-bind:aria-disabled="historyPending" wire:loading.class="opacity-70" class="min-h-[44px] rounded-md border border-stone-400 bg-white px-2 dark:border-stone-600 dark:bg-stone-900">
+                    <select id="incident-filter" x-on:change="runHistoryAction('filterIncidents', $el.value).finally(() => { $el.value = $wire.incidentFilter })" x-bind:aria-disabled="historyPending.toString()" wire:loading.class="opacity-70" class="min-h-[44px] rounded-md border border-stone-500 bg-white px-2 dark:border-stone-500 dark:bg-stone-900">
                         @foreach (['all' => 'All incidents', 'open' => 'Open', 'resolved' => 'Resolved'] as $value => $label)
                             <option value="{{ $value }}" @selected($incidentFilter === $value)>{{ $label }}</option>
                         @endforeach

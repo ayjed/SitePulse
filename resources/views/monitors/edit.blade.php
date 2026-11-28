@@ -7,7 +7,7 @@
         @include('partials.owner-header', ['owner' => $owner])
 
         <main class="mx-auto max-w-3xl px-6 py-10">
-            <h1 id="main-content" tabindex="-1" class="text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-50">
+            <h1 id="main-content" tabindex="-1" class="wrap-anywhere text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-50">
                 Edit Monitor: {{ $monitor->name }}
             </h1>
             <p class="mt-1 text-sm text-stone-600 dark:text-stone-400">

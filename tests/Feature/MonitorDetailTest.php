@@ -20,7 +20,7 @@ uses(RefreshDatabase::class);
 
 function monitorDetailActionToken(string $html, string $action): string
 {
-    preg_match('/x-on:click="runHistoryAction\(\''.preg_quote($action, '/').'\', \'([A-Za-z0-9_.-]+)\'\)"/', $html, $matches);
+    preg_match('/data-cursor="([A-Za-z0-9_.-]+)"\s+x-on:click="if \(\$el\.dataset\.cursor\) runHistoryAction\(\''.preg_quote($action, '/').'\', \$el\.dataset\.cursor\)"/', $html, $matches);
 
     return $matches[1] ?? throw new RuntimeException("Missing $action cursor");
 }

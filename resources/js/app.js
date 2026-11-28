@@ -16,3 +16,5 @@ document.querySelectorAll('[data-password-toggle]').forEach((button) => {
         button.textContent = revealed ? 'Show' : 'Hide';
     });
 });
+
+document.querySelector('[data-focus-error]')?.focus();

@@ -19,7 +19,7 @@
 @endphp
 
 @if ($errors->any())
-    <div id="monitor-form-errors" role="alert" aria-live="assertive" class="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950/60 dark:text-red-200">
+    <div id="monitor-form-errors" tabindex="-1" data-focus-error role="alert" aria-live="assertive" class="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950/60 dark:text-red-200">
         <p class="font-semibold">Please correct the highlighted configuration errors:</p>
         <ul class="mt-2 list-disc pl-5">
             @foreach ($errors->all() as $error)
@@ -42,7 +42,7 @@
             value="{{ $nameValue }}"
             required
             @if ($errors->has('name')) aria-invalid="true" aria-describedby="name-error" @endif
-            class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+            class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
         >
         @error('name')
             <p id="name-error" class="text-sm text-red-700 dark:text-red-300">{{ $message }}</p>
@@ -67,7 +67,7 @@
             required
             @if ($errors->has('url')) aria-invalid="true" @endif
             aria-describedby="url-hint{{ $errors->has('url') ? ' url-error' : '' }}"
-            class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+            class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
         >
         @error('url')
             <p id="url-error" class="text-sm text-red-700 dark:text-red-300">{{ $message }}</p>
@@ -84,7 +84,7 @@
                 name="check_interval_minutes"
                 required
                 @if ($errors->has('check_interval_minutes')) aria-invalid="true" aria-describedby="interval-error" @endif
-                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
             >
                 @foreach ($allowedIntervals as $minutes)
                     <option value="{{ $minutes }}" @selected($intervalValue === (string) $minutes)>
@@ -110,7 +110,7 @@
                 value="{{ $timeoutValue }}"
                 required
                 @if ($errors->has('timeout_seconds')) aria-invalid="true" aria-describedby="timeout-error" @endif
-                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
             >
             @error('timeout_seconds')
                 <p id="timeout-error" class="text-sm text-red-700 dark:text-red-300">{{ $message }}</p>
@@ -132,7 +132,7 @@
                 value="{{ $minStatusValue }}"
                 required
                 @if ($errors->has('expected_status_code_min')) aria-invalid="true" aria-describedby="min-status-error" @endif
-                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
             >
             @error('expected_status_code_min')
                 <p id="min-status-error" class="text-sm text-red-700 dark:text-red-300">{{ $message }}</p>
@@ -152,7 +152,7 @@
                 value="{{ $maxStatusValue }}"
                 required
                 @if ($errors->has('expected_status_code_max')) aria-invalid="true" aria-describedby="max-status-error" @endif
-                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+                class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
             >
             @error('expected_status_code_max')
                 <p id="max-status-error" class="text-sm text-red-700 dark:text-red-300">{{ $message }}</p>

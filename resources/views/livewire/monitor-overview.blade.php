@@ -1,9 +1,22 @@
-<section class="mt-8 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xs dark:border-stone-800 dark:bg-stone-900" aria-labelledby="monitor-overview-heading">
+<section class="mt-8 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xs dark:border-stone-800 dark:bg-stone-900" aria-labelledby="monitor-overview-heading"
+    x-data="{
+        overviewPending: false,
+        async loadOverview(cursor) {
+            if (this.overviewPending) return;
+            this.overviewPending = true;
+            try {
+                if (cursor === undefined) await this.$wire.$refresh();
+                else await this.$wire.showPage(cursor);
+            } finally {
+                this.overviewPending = false;
+            }
+        },
+    }">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 sm:px-6 dark:border-stone-800">
         <h2 id="monitor-overview-heading" class="text-lg font-semibold">Monitor status</h2>
         <div class="flex flex-wrap items-center gap-3">
             <span wire:loading.delay role="status" class="text-sm text-stone-700 dark:text-stone-300">Loading monitors…</span>
-            <button type="button" wire:click="$refresh" wire:loading.attr="disabled" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 disabled:opacity-60 dark:border-stone-600 dark:hover:bg-stone-800">
+            <button type="button" x-on:click="loadOverview()" x-bind:aria-disabled="overviewPending.toString()" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 aria-disabled:opacity-60 dark:border-stone-600 dark:hover:bg-stone-800">
                 Refresh
             </button>
         </div>
@@ -64,16 +77,15 @@
 
         @if ($monitors->previousCursor() || $monitors->nextCursor())
             <nav aria-label="Monitor pages" class="flex flex-wrap gap-2 border-t border-stone-200 px-4 py-3 sm:px-6 dark:border-stone-800">
-                @if ($previous = $monitors->previousCursor())
-                    <button type="button" wire:click="showPage('{{ $previous->encode() }}')" wire:loading.attr="disabled" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 disabled:opacity-60 dark:border-stone-600 dark:hover:bg-stone-800">
-                        Previous page
+                @foreach (['Previous' => $monitors->previousCursor(), 'Next' => $monitors->nextCursor()] as $direction => $pageCursor)
+                    <button type="button" data-cursor="{{ $pageCursor?->encode() }}"
+                        x-on:click="if ($el.dataset.cursor) loadOverview($el.dataset.cursor)"
+                        x-bind:aria-disabled="(overviewPending || !$el.dataset.cursor).toString()"
+                        aria-disabled="{{ $pageCursor ? 'false' : 'true' }}"
+                        class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 aria-disabled:opacity-60 dark:border-stone-600 dark:hover:bg-stone-800">
+                        {{ $direction }} page
                     </button>
-                @endif
-                @if ($next = $monitors->nextCursor())
-                    <button type="button" wire:click="showPage('{{ $next->encode() }}')" wire:loading.attr="disabled" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 disabled:opacity-60 dark:border-stone-600 dark:hover:bg-stone-800">
-                        Next page
-                    </button>
-                @endif
+                @endforeach
             </nav>
         @endif
     @endif

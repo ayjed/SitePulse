@@ -39,7 +39,7 @@
     outline-offset: 2px;
 }
 
-:where(a:any-link, button, input, select, textarea, [tabindex='-1']):focus-visible {
+:where(a:any-link, button, input, select, textarea, summary, [tabindex]):focus-visible {
     outline: 3px solid #2563eb;
     outline-offset: 2px;
 }

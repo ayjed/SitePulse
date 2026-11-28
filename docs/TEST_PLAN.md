@@ -90,6 +90,12 @@ Use the exact release candidate and a synthetic owner fixture. Record the candid
 
 ---
 
+### P04-02 TLS contract regression
+
+Run the metadata unit cases, SafeHttp security and loopback integration suites, and incident and notification feature cases. Verify initial-origin attribution, destination rejection and bounded transport, the configurable UTC second boundary, and renewal deduplication. Generated test certificates use an isolated CA, a trusted expired leaf, and separate trust and hostname rejection cases. [P04-02 verification matrix](audits/P04_02_TLS_VERIFICATION.md)
+
+---
+
 ## 3. Evidence Protocol
 
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |

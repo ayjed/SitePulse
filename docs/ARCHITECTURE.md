@@ -107,7 +107,7 @@ The `SafeHttpClient` isolates and enforces:
 5. **Pre-Flight DNS Resolution & Pinning:** Resolves target hostname synchronously per slot via `dns_get_record(DNS_A + DNS_AAAA)` (using `NativeDnsResolver`; no separate c-ares async DNS dependency). Validates all records against private/reserved CIDRs. Pins socket IP using cURL's `CURLOPT_RESOLVE`.
 6. **Connected Peer IP Verification:** Immediately inspects `curl_getinfo($ch, CURLINFO_PRIMARY_IP)` post-connection. If the connected peer IP is in a restricted range or does not match the pinned IP, the response is discarded and the check is aborted.
 7. **Manual Hop-by-Hop Redirect Validation:** Automatic redirects are disabled (`CURLOPT_FOLLOWLOCATION = false`). Traverses 3xx redirects manually up to 3 hops with loop detection and full re-validation of each hop URL.
-8. **TLS Certificate Validation & Inspection:** Verifies peer certificate (`CURLOPT_SSL_VERIFYPEER = true`), extracts certificate expiration date, and flags certificates expiring within $\le 14$ days.
+8. **TLS Certificate Validation & Inspection:** Verifies certificate chain and hostname on every HTTPS hop. The first configured HTTPS request supplies the verified leaf expiry and transient issuer. Persistence applies the inclusive configurable UTC warning window (14 days by default). [ADR-0006](decisions/ADR-0006-tls-origin-verification.md)
 
 ### 2.3 Incident State Machine
 - **States:** `UNKNOWN`, `OPERATIONAL`, `PENDING_DOWN`, `DOWN`, `PENDING_RECOVERY`, `PAUSED` (`UNKNOWN` prevents newly created, resumed, or URL-changed monitors from reporting `OPERATIONAL` prior to a completed successful probe).

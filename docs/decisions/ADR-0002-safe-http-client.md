@@ -74,7 +74,7 @@ All resolved IP addresses are evaluated against:
 
 ### 8. TLS Certificate Validation & Inspection
 - Enforce strict peer verification: `CURLOPT_SSL_VERIFYPEER = true` and `CURLOPT_SSL_VERIFYHOST = 2`.
-- Capture peer certificate metadata (`CURLINFO_CERTINFO`) to record expiration date (`validTo_time_t`) and issuer.
+- Capture the verified initial HTTPS leaf metadata (`CURLINFO_CERTINFO`) for origin expiry and transient issuer. [ADR-0006](ADR-0006-tls-origin-verification.md) defines attribution and warning behavior.
 - Decouple certificate expiry alerts ($\le 14$ days remaining) from HTTP availability checks.
 
 ### 9. Timeouts & Resource Caps

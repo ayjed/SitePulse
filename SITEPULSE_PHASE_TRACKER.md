@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 04 — Alerts, TLS and hardening (P04-01 requirements reconciliation)
+**Current phase:** 04 — Alerts, TLS and hardening (P04-02 TLS contract and transport verification)
 **Project status:** IN PROGRESS (Phase 03 conditionally approved for functional delivery 2026-11-28)
 **Approved by:** @ayjed (Phase 01 approved 2026-11-27, Phase 02 approved 2026-11-28, Phase 03 conditional functional approval effective 2026-11-28)
 **Approval date:** 2026-11-28
 **Last reviewed:** 2026-11-28
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `codex/phase-04-requirements-reconciliation` (from `main` `1034bd6`; `https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `codex/phase-04-tls-verification` (from `main` `44f9d51`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -36,7 +36,8 @@
 - [x] Phase 03 P03-05: Merge the [final acceptance audit](docs/audits/PHASE_03_FINAL_ACCEPTANCE.md) via PR #14 at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The authorized CI run `46160837252` passed all four jobs.
 - [x] Phase 03 conditional functional approval effective through PR #15 (`1034bd6e936aa2a25d49b8ec4f39a19a9c820439`) under [ADR-0005](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md).
 - [x] Verify the authorized Chromium check was added to active `main` ruleset `28256290` alongside the three PHP checks, all from integration `15368`.
-- [ ] Phase 04 P04-01: Review the [requirements reconciliation](docs/audits/P04_01_REQUIREMENTS_RECONCILIATION.md) and obtain explicit decisions and authorization before P04-02.
+- [x] Phase 04 P04-01: Maintainer accepted the [reconciliation](docs/audits/P04_01_REQUIREMENTS_RECONCILIATION.md); PR #16 squash-merged at `44f9d5132257a9269f216de1b9386defcf2de0db`.
+- [ ] Phase 04 P04-02: Review the [TLS verification evidence](docs/audits/P04_02_TLS_VERIFICATION.md) and separately authorize merge. P04-03 remains pending.
 - [ ] @ayjed to close the [mandatory accessibility release gate](docs/phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate) before public release approval.
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.

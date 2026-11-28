@@ -26,7 +26,8 @@ uses(RefreshDatabase::class);
 
 function makePendingAlertNotification(string $suffix = '1', string $ownerEmail = 'owner@example.test'): IncidentNotification
 {
-    $owner = User::factory()->owner()->create(['email' => $ownerEmail]);
+    $owner = User::query()->where('is_owner', true)->first()
+        ?? User::factory()->owner()->create(['email' => $ownerEmail]);
     $monitor = Monitor::factory()->for($owner)->down()->create([
         'name' => "API Service {$suffix}",
         'url' => "https://api-{$suffix}.example.test/health",
@@ -45,7 +46,7 @@ function makePendingAlertNotification(string $suffix = '1', string $ownerEmail =
         'type' => IncidentNotificationType::DOWN,
         'event_key' => "incident:{$incident->id}:down:{$suffix}",
         'channel' => 'mail',
-        'recipient' => $ownerEmail,
+        'recipient' => $owner->email,
         'subject' => "[SitePulse] DOWN: API Service {$suffix}",
         'delivery_status' => NotificationDeliveryStatus::PENDING,
     ]);
@@ -517,5 +518,171 @@ test('gates scheduled notification delivery behind independent opt-in flags acro
             }
         }
         @rmdir($workDir);
+    }
+});
+
+test('reconciles stale final-attempt sending notification cleanly without re-sending email and handles concurrent reconciliation', function () {
+    config([
+        'sitepulse.alerts_enabled' => true,
+        'sitepulse.notification_claim_timeout_seconds' => 60,
+        'sitepulse.notification_max_attempts' => 3,
+    ]);
+
+    Mail::fake();
+
+    $exhaustedStale = makePendingAlertNotification('final-crash', 'owner1@example.test');
+    $retryableStale = makePendingAlertNotification('retryable-crash', 'owner2@example.test');
+
+    try {
+        // Seed final allowed attempt (attempts=3 == max_attempts) stuck in 'sending' after a crash.
+        $exhaustedStale->forceFill([
+            'delivery_status' => NotificationDeliveryStatus::SENDING,
+            'claimed_at' => CarbonImmutable::parse('2026-11-28 11:00:00', 'UTC'),
+            'claim_token' => str_repeat('b', 64),
+            'claim_version' => 3,
+            'attempts' => 3,
+        ])->save();
+
+        // Seed non-final attempt (attempts=1 < max_attempts) stuck in 'sending' to verify normal retry preservation.
+        $retryableStale->forceFill([
+            'delivery_status' => NotificationDeliveryStatus::SENDING,
+            'claimed_at' => CarbonImmutable::parse('2026-11-28 11:00:00', 'UTC'),
+            'claim_token' => str_repeat('c', 64),
+            'claim_version' => 1,
+            'attempts' => 1,
+        ])->save();
+
+        // Before claim timeout elapses -> neither row is touched.
+        Carbon::setTestNow('2026-11-28 11:00:45');
+        $withinWindow = app(NotificationDispatcher::class)->dispatchPending();
+        expect($withinWindow['reconciled'])->toBe(0)
+            ->and($withinWindow['claimed'])->toBe(0);
+        Mail::assertNothingSent();
+
+        // Past claim timeout -> exhausted row is reconciled to FAILED (0 extra emails, attempts untouched),
+        // while retryable row is reclaimed & sent normally (attempts 1 -> 2).
+        Carbon::setTestNow('2026-11-28 11:01:05');
+        $reconcilePass = app(NotificationDispatcher::class)->dispatchPending();
+        $exhaustedStale->refresh();
+        $retryableStale->refresh();
+
+        expect($reconcilePass['reconciled'])->toBe(1)
+            ->and($reconcilePass['claimed'])->toBe(1)
+            ->and($reconcilePass['sent'])->toBe(1)
+            ->and($exhaustedStale->delivery_status)->toBe(NotificationDeliveryStatus::FAILED)
+            ->and($exhaustedStale->is_success)->toBeFalse()
+            ->and($exhaustedStale->sent_at)->toBeNull()
+            ->and($exhaustedStale->next_attempt_at)->toBeNull()
+            ->and($exhaustedStale->claimed_at)->toBeNull()
+            ->and($exhaustedStale->claim_token)->toBeNull()
+            ->and($exhaustedStale->claim_version)->toBe(4)
+            ->and($exhaustedStale->attempts)->toBe(3)
+            ->and($exhaustedStale->error_message)->toBe(NotificationDispatcher::STALE_EXHAUSTED_ERROR_MESSAGE)
+            ->and($exhaustedStale->error_message)->toContain('at-least-once')
+            ->and($retryableStale->delivery_status)->toBe(NotificationDeliveryStatus::SENT)
+            ->and($retryableStale->is_success)->toBeTrue()
+            ->and($retryableStale->attempts)->toBe(2);
+
+        // Exactly 1 email sent (only retryableStale); exhaustedStale sent ZERO extra emails.
+        Mail::assertSentCount(1);
+
+        // Concurrent/repeated reconciliation pass is an exact idempotent no-op.
+        $secondPass = app(NotificationDispatcher::class)->dispatchPending();
+        expect($secondPass['reconciled'])->toBe(0)
+            ->and($secondPass['claimed'])->toBe(0)
+            ->and($exhaustedStale->fresh()->claim_version)->toBe(4)
+            ->and($exhaustedStale->fresh()->attempts)->toBe(3);
+        Mail::assertSentCount(1);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
+test('successful final-attempt delivery and concurrent reconciliation fence cleanly in both race orderings', function () {
+    config([
+        'sitepulse.alerts_enabled' => true,
+        'sitepulse.notification_claim_timeout_seconds' => 60,
+        'sitepulse.notification_max_attempts' => 3,
+    ]);
+
+    $notification = makePendingAlertNotification('final-race', 'owner@example.test');
+    $notification->forceFill([
+        'delivery_status' => NotificationDeliveryStatus::FAILED,
+        'attempts' => 2,
+        'next_attempt_at' => CarbonImmutable::parse('2026-11-28 11:10:00', 'UTC'),
+        'claim_version' => 2,
+    ])->save();
+
+    $reconcileResult = null;
+    $sendCount = 0;
+
+    try {
+        // Ordering A: Final-attempt worker stalls in Mail::send() past timeout; reconciler runs first and reconciles;
+        // then slow worker finishes Mail::send() and is fenced without overwriting reconciled FAILED state.
+        Carbon::setTestNow('2026-11-28 11:10:05');
+
+        Mail::shouldReceive('to')
+            ->once()
+            ->with('owner@example.test')
+            ->andReturn(new class($reconcileResult, $sendCount)
+            {
+                public function __construct(private mixed &$reconcileResult, private int &$sendCount) {}
+
+                public function send(mixed $mailable): void
+                {
+                    $this->sendCount++;
+
+                    // Stalls past claim_timeout -> concurrent dispatcher reconciles the stale final attempt first.
+                    Carbon::setTestNow('2026-11-28 11:11:15');
+                    Cache::lock(NotificationDispatcher::EXECUTION_LOCK_KEY)->forceRelease();
+                    $this->reconcileResult = app(NotificationDispatcher::class)->dispatchPending();
+                    Carbon::setTestNow('2026-11-28 11:11:20');
+                }
+            });
+
+        $finalWorkerResult = app(NotificationDispatcher::class)->dispatchPending();
+        $notification->refresh();
+
+        expect($sendCount)->toBe(1)
+            ->and($reconcileResult['reconciled'])->toBe(1)
+            ->and($finalWorkerResult['sent'])->toBe(0)
+            ->and($finalWorkerResult['fenced'])->toBe(1)
+            ->and($notification->delivery_status)->toBe(NotificationDeliveryStatus::FAILED)
+            ->and($notification->is_success)->toBeFalse()
+            ->and($notification->sent_at)->toBeNull()
+            ->and($notification->claim_token)->toBeNull()
+            ->and($notification->claim_version)->toBe(4)
+            ->and($notification->attempts)->toBe(3);
+
+        // Ordering B: Final-attempt worker commits SENT just before reconciler executes -> reconciler sees 0 stale rows
+        // and never downgrades or alters the committed SENT state.
+        $sentRace = makePendingAlertNotification('sent-before-reconcile', 'owner@example.test');
+        $sentRace->forceFill([
+            'delivery_status' => NotificationDeliveryStatus::FAILED,
+            'attempts' => 2,
+            'next_attempt_at' => CarbonImmutable::parse('2026-11-28 11:20:00', 'UTC'),
+            'claim_version' => 2,
+        ])->save();
+
+        Carbon::setTestNow('2026-11-28 11:20:05');
+        $this->app->forgetInstance('mail.manager');
+        Mail::clearResolvedInstances();
+        Mail::fake();
+
+        // Suppose Mail::send succeeds after a slow delay beyond 60s before any reconciler starts -> commits SENT cleanly.
+        $sentResult = app(NotificationDispatcher::class)->dispatchPending();
+        Carbon::setTestNow('2026-11-28 11:22:00');
+        $lateReconciler = app(NotificationDispatcher::class)->dispatchPending();
+        $sentRace->refresh();
+
+        expect($sentResult['sent'])->toBe(1)
+            ->and($lateReconciler['reconciled'])->toBe(0)
+            ->and($lateReconciler['claimed'])->toBe(0)
+            ->and($sentRace->delivery_status)->toBe(NotificationDeliveryStatus::SENT)
+            ->and($sentRace->is_success)->toBeTrue()
+            ->and($sentRace->sent_at)->not->toBeNull()
+            ->and($sentRace->attempts)->toBe(3);
+    } finally {
+        Carbon::setTestNow();
     }
 });

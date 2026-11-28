@@ -29,10 +29,14 @@ use Throwable;
  *   calls cannot be forcibly preempted mid-socket write and rely on the <= 5s transport timeout (`config/mail.php`).
  * - Crashes after remote SMTP acceptance and before fenced DB acknowledgement recover via `claim_timeout_seconds`,
  *   providing durable at-least-once delivery semantics rather than guaranteed exactly-once SMTP transmission.
+ * - Stale `SENDING` rows whose `attempts` have already reached `notification_max_attempts` are reconciled atomically
+ *   with claim-version fencing into terminal `FAILED` without sending another email or claiming definitive non-delivery.
  */
 final class NotificationDispatcher
 {
     public const EXECUTION_LOCK_KEY = 'sitepulse:dispatch-notifications:execution';
+
+    public const STALE_EXHAUSTED_ERROR_MESSAGE = 'Final delivery attempt timed out during dispatch (at-least-once crash window: SMTP acceptance could not be confirmed).';
 
     /** @var Closure(): int */
     private readonly Closure $monotonicClockNs;
@@ -54,6 +58,7 @@ final class NotificationDispatcher
      *     claimed: int,
      *     sent: int,
      *     failed: int,
+     *     reconciled: int,
      *     fenced: int,
      *     deadlineReached: bool,
      *     elapsedMs: int
@@ -78,6 +83,7 @@ final class NotificationDispatcher
                 'claimed' => 0,
                 'sent' => 0,
                 'failed' => 0,
+                'reconciled' => 0,
                 'fenced' => 0,
                 'deadlineReached' => false,
                 'elapsedMs' => $this->elapsedMs($startedAtNs),
@@ -111,6 +117,7 @@ final class NotificationDispatcher
                 'claimed' => 0,
                 'sent' => 0,
                 'failed' => 0,
+                'reconciled' => 0,
                 'fenced' => 0,
                 'deadlineReached' => false,
                 'elapsedMs' => $elapsedMs,
@@ -124,6 +131,7 @@ final class NotificationDispatcher
         $claimedCount = 0;
         $sentCount = 0;
         $failedCount = 0;
+        $reconciledCount = 0;
         $fencedCount = 0;
         $deadlineReached = false;
 
@@ -132,14 +140,30 @@ final class NotificationDispatcher
             $nowFormatted = $now->format('Y-m-d H:i:s');
             $staleClaimCutoffFormatted = $now->subSeconds($claimTimeoutSeconds)->format('Y-m-d H:i:s');
 
-            $candidateIds = IncidentNotification::query()
-                ->where(function (Builder $query) use ($nowFormatted, $staleClaimCutoffFormatted, $maxAttempts): void {
-                    $this->applyClaimableFilter($query, $nowFormatted, $staleClaimCutoffFormatted, $maxAttempts);
-                })
-                ->orderBy('id')
-                ->limit($effectiveLimit)
-                ->pluck('id')
-                ->all();
+            $reconcileOutcome = $this->reconcileStaleExhaustedClaims(
+                limit: $effectiveLimit,
+                maxAttempts: $maxAttempts,
+                claimTimeoutSeconds: $claimTimeoutSeconds,
+                staleClaimCutoffFormatted: $staleClaimCutoffFormatted,
+                deadlineNs: $deadlineNs,
+            );
+            $reconciledCount = $reconcileOutcome['reconciled'];
+            $fencedCount += $reconcileOutcome['fenced'];
+            if ($reconcileOutcome['deadlineReached']) {
+                $deadlineReached = true;
+            }
+
+            $remainingLimit = $effectiveLimit - $reconciledCount;
+            $candidateIds = ($remainingLimit > 0 && ! $deadlineReached)
+                ? IncidentNotification::query()
+                    ->where(function (Builder $query) use ($nowFormatted, $staleClaimCutoffFormatted, $maxAttempts): void {
+                        $this->applyClaimableFilter($query, $nowFormatted, $staleClaimCutoffFormatted, $maxAttempts);
+                    })
+                    ->orderBy('id')
+                    ->limit($remainingLimit)
+                    ->pluck('id')
+                    ->all()
+                : [];
 
             foreach ($candidateIds as $notificationId) {
                 if ($this->nowNs() >= $deadlineNs) {
@@ -304,6 +328,7 @@ final class NotificationDispatcher
                 'claimed' => $claimedCount,
                 'sent' => $sentCount,
                 'failed' => $failedCount,
+                'reconciled' => $reconciledCount,
                 'fenced' => $fencedCount,
                 'deadline_reached' => $deadlineReached,
                 'elapsed_ms' => $elapsedMs,
@@ -315,6 +340,7 @@ final class NotificationDispatcher
                 'claimed' => $claimedCount,
                 'sent' => $sentCount,
                 'failed' => $failedCount,
+                'reconciled' => $reconciledCount,
                 'fenced' => $fencedCount,
                 'deadlineReached' => $deadlineReached,
                 'elapsedMs' => $elapsedMs,
@@ -398,6 +424,93 @@ final class NotificationDispatcher
             ->where('claim_token', $claimToken)
             ->where('claim_version', $claimVersion)
             ->update($attributes);
+    }
+
+    /**
+     * Atomically finalize stale SENDING notifications that have already exhausted retry attempts.
+     *
+     * Transitions expired final-attempt claims to FAILED without sending another email or altering
+     * attempts, fenced by (id, delivery_status='sending', claim_token, claim_version, attempts>=max).
+     *
+     * @return array{reconciled: int, fenced: int, deadlineReached: bool}
+     */
+    private function reconcileStaleExhaustedClaims(
+        int $limit,
+        int $maxAttempts,
+        int $claimTimeoutSeconds,
+        string $staleClaimCutoffFormatted,
+        int $deadlineNs,
+    ): array {
+        $candidates = IncidentNotification::query()
+            ->where('delivery_status', NotificationDeliveryStatus::SENDING->value)
+            ->where('attempts', '>=', $maxAttempts)
+            ->whereNotNull('claimed_at')
+            ->where('claimed_at', '<=', $staleClaimCutoffFormatted)
+            ->orderBy('id')
+            ->limit($limit)
+            ->get(['id', 'monitor_id', 'type', 'attempts', 'claim_token', 'claim_version']);
+
+        $reconciled = 0;
+        $fenced = 0;
+        $deadlineReached = false;
+        $sanitizedMessage = CheckBatchPersister::sanitizeErrorMessage(self::STALE_EXHAUSTED_ERROR_MESSAGE);
+
+        foreach ($candidates as $candidate) {
+            if ($this->nowNs() >= $deadlineNs) {
+                $deadlineReached = true;
+
+                break;
+            }
+
+            $now = CarbonImmutable::instance(now('UTC'))->utc();
+            $nowFormatted = $now->format('Y-m-d H:i:s');
+            $staleCutoffFormatted = $now->subSeconds($claimTimeoutSeconds)->format('Y-m-d H:i:s');
+
+            $updateQuery = IncidentNotification::query()
+                ->whereKey((int) $candidate->id)
+                ->where('delivery_status', NotificationDeliveryStatus::SENDING->value)
+                ->where('attempts', '>=', $maxAttempts)
+                ->whereNotNull('claimed_at')
+                ->where('claimed_at', '<=', $staleCutoffFormatted)
+                ->where('claim_version', (int) $candidate->claim_version);
+
+            if ($candidate->claim_token === null) {
+                $updateQuery->whereNull('claim_token');
+            } else {
+                $updateQuery->where('claim_token', $candidate->claim_token);
+            }
+
+            $updated = $updateQuery->update([
+                'delivery_status' => NotificationDeliveryStatus::FAILED->value,
+                'claimed_at' => null,
+                'claim_token' => null,
+                'claim_version' => DB::raw('claim_version + 1'),
+                'next_attempt_at' => null,
+                'sent_at' => null,
+                'is_success' => false,
+                'error_message' => $sanitizedMessage,
+                'updated_at' => $nowFormatted,
+            ]);
+
+            if ($updated === 1) {
+                $reconciled++;
+                Log::warning('SitePulse reconciled stale exhausted notification claim into terminal failed state.', [
+                    'notification_id' => (int) $candidate->id,
+                    'monitor_id' => $candidate->monitor_id,
+                    'type' => $candidate->type->value,
+                    'attempts' => (int) $candidate->attempts,
+                    'claim_version' => (int) $candidate->claim_version + 1,
+                ]);
+            } else {
+                $fenced++;
+            }
+        }
+
+        return [
+            'reconciled' => $reconciled,
+            'fenced' => $fenced,
+            'deadlineReached' => $deadlineReached,
+        ];
     }
 
     private function nowNs(): int

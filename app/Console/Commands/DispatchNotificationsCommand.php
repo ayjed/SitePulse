@@ -83,10 +83,11 @@ class DispatchNotificationsCommand extends Command
         }
 
         $this->info(sprintf(
-            'Notification dispatch finished: claimed=%d sent=%d failed=%d fenced=%d deadline_reached=%s elapsed_ms=%d',
+            'Notification dispatch finished: claimed=%d sent=%d failed=%d reconciled=%d fenced=%d deadline_reached=%s elapsed_ms=%d',
             $report['claimed'],
             $report['sent'],
             $report['failed'],
+            $report['reconciled'],
             $report['fenced'],
             $report['deadlineReached'] ? 'true' : 'false',
             $report['elapsedMs'],

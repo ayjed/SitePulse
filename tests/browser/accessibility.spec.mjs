@@ -66,6 +66,8 @@ for (const colorScheme of ['light', 'dark']) {
             await page.locator('summary').filter({ hasText: 'Delete Monitor' }).press('Enter');
             await expect(page.getByRole('button', { name: 'Permanently delete monitor' })).toBeVisible();
             await expect(page.getByRole('table', { name: /latency/i })).toBeVisible();
+            const incidents = page.getByRole('table', { name: 'Incident history' });
+            await expect(incidents.getByRole('columnheader')).toHaveText(['Status', 'Cause', 'Started (UTC)', 'Resolved (UTC)', 'Duration']);
             await scan(page, 'Detail, expanded latency table and deletion confirmation');
             await reflows(page, 'Detail, expanded latency table and deletion confirmation');
             await fieldBoundary(page.getByRole('combobox', { name: /^Status/ }), 'section');
@@ -121,6 +123,16 @@ test('keyboard tab order reaches detail actions and the first table can scroll l
     await expect.poll(() => checkRegion.evaluate(region => region.scrollLeft)).toBeGreaterThan(0);
     await page.keyboard.press('Shift+Tab');
     await expect(controls.at(-2)).toBeFocused();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('combobox', { name: /^Status/ })).toBeFocused();
+    await page.keyboard.press('Tab');
+    const incidentRegion = page.getByRole('region', { name: 'Scrollable incident history' });
+    await expect(incidentRegion).toBeFocused();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => incidentRegion.evaluate(region => region.scrollLeft)).toBeGreaterThan(0);
 });
 
 test('detail remains readable with 200% root text sizing at 320 CSS pixels', async ({ page, site }) => {

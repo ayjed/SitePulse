@@ -1,9 +1,9 @@
 # Phase 02 Final Acceptance Audit
 
 **Audit Date:** 2026-11-28  
-**Audit Branch:** `audit/phase-02-final-acceptance` (branched `--no-track` from `origin/main`)  
+**Audit Branch:** `audit/phase-02-final-acceptance` (merged via PR [#8](https://github.com/ayjed/SitePulse/pull/8) at `91562c61241cd2cf49ac919489db42cb68ac83b1`; closeout recorded on `docs/phase-02-approval`)
 **Repository:** `ayjed/SitePulse`  
-**Phase Status:** IN PROGRESS (Awaiting Maintainer Sign-Off; Phase 03 NOT STARTED)
+**Phase Status:** APPROVED by @ayjed on 2026-11-28 (Phase 03 NOT STARTED)
 
 ---
 
@@ -142,6 +142,16 @@ Measured in isolated file-backed SQLite WAL processes (`journal_mode=wal`, `busy
 
 ## 12. GO / NO-GO Recommendation for Phase 02 Acceptance
 
-**Recommendation:** **GO (Conditional on Maintainer Sign-Off of the 1-Minute 30-Day SQLite Storage Variance [`68.92 MiB` vs `<= 50 MB` Target]).**
+**Audit Recommendation (2026-11-28):** **GO (Conditional on Maintainer Sign-Off of the 1-Minute 30-Day SQLite Storage Variance [`68.92 MiB` vs `<= 50 MB` Target]).**
 
-Phase 02 implementation, security posture, concurrency safety, and automated SQLite/MySQL verification meet acceptance standards. Phase 02 remains **IN PROGRESS** and Phase 03 remains **NOT STARTED** pending maintainer approval.
+Phase 02 implementation, security posture, concurrency safety, and automated SQLite/MySQL verification met acceptance standards; formal closeout decision follows in Section 13.
+
+---
+
+## 13. Final Maintainer Decision (2026-11-28)
+
+- **Decision:** **APPROVED** by Maintainer `@ayjed` on `2026-11-28`.
+- **Audit Merge Reference:** PR [#8](https://github.com/ayjed/SitePulse/pull/8) merged into `main` at `91562c61241cd2cf49ac919489db42cb68ac83b1`.
+- **Accepted Performance Exception:** Explicitly accepted the documented empirical SQLite 30-day 1-minute storage footprint (`68.92 MiB` measured across `432,000` rows for 10 monitors at 1-minute intervals over 30 days) against the original `<= 50 MB` target. The benchmark table retains its original target-comparison outcome alongside this approved variance.
+- **Retention & Deployment Policy:** Default 30-day check-history retention (`SITEPULSE_HISTORY_RETENTION_DAYS=30`) remains unchanged. Scheduled monitoring (`SITEPULSE_SCHEDULED_CHECKS_ENABLED=false`), outbound alerts (`SITEPULSE_ALERTS_ENABLED=false`), scheduled notifications (`SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED=false`), and scheduled pruning (`SITEPULSE_PRUNE_CHECKS_ENABLED=false`) remain disabled by default. Phase 05 shared-hosting production validation has not yet occurred.
+- **Phase Gate Status:** Phase 02 is **APPROVED**; Phase 03 remains **NOT STARTED** pending explicit maintainer authorization.

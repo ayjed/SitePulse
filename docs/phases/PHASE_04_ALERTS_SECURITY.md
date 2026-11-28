@@ -1,10 +1,10 @@
 # Phase 04 — Alerts, TLS, and Hardening
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS (P04-01 requirements and existing engine reconciliation active)
 
 ## Proposed execution sequence
 
-Phase 04 requires separate maintainer authorization after Phase 03 functional closeout. Reuse the [final audit's dependency and risk assessment](../audits/PHASE_03_FINAL_ACCEPTANCE.md#7-phase-04-readiness-and-proposed-sequence).
+The maintainer authorized P04-01 after Phase 03 conditional functional approval took effect through PR #15 at `1034bd6e936aa2a25d49b8ec4f39a19a9c820439`. The [P04-01 reconciliation](../audits/P04_01_REQUIREMENTS_RECONCILIATION.md) maps evidence, gaps and proposed decisions. P04-02 through P04-04 require subsequent authorization.
 
 | Task | Depends on | Outcome |
 |---|---|---|
@@ -21,7 +21,7 @@ Phase 04 requires separate maintainer authorization after Phase 03 functional cl
 - [ ] Authentication, rate limit and error-reporting review.
 
 ## Exit criteria
-- [ ] No duplicate alerts during rechecks/retries.
+- [ ] Meet the existing no-duplicate-alert criterion during rechecks and retries. P04-01 identifies its unresolved distinction between unique database events and external SMTP acceptance. Any wording change requires maintainer approval.
 - [ ] HTTPS expiry cases verified.
 - [ ] Security test plan passes.
 - [ ] Maintainer approves evidence.

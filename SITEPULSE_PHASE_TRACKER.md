@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 03 — Accessible dashboard (functional acceptance documentation in review)
-**Project status:** IN REVIEW (Phase 02 approved 2026-11-28)
-**Approved by:** @ayjed (Phase 01 approved 2026-11-27; Phase 02 approved 2026-11-28)
+**Current phase:** 04 — Alerts, TLS and hardening (P04-01 requirements reconciliation)
+**Project status:** IN PROGRESS (Phase 03 conditionally approved for functional delivery 2026-11-28)
+**Approved by:** @ayjed (Phase 01 approved 2026-11-27, Phase 02 approved 2026-11-28, Phase 03 conditional functional approval effective 2026-11-28)
 **Approval date:** 2026-11-28
 **Last reviewed:** 2026-11-28
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `docs/phase-03-approval` (from `main` `df37a2a`; `https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `codex/phase-04-requirements-reconciliation` (from `main` `1034bd6`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -15,6 +15,7 @@
 - `BLOCKED`: waiting for prerequisite or decision
 - `IN REVIEW`: implementation complete, awaiting evidence
 - `APPROVED`: exit criteria met and explicitly accepted
+- `CONDITIONALLY APPROVED`: maintainer accepted a defined scope under a recorded decision with outstanding conditions
 
 ## Phase gates
 | Phase | Objective | Status | Exit criteria |
@@ -22,8 +23,8 @@
 | 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
 | 01 | Foundation and local development | APPROVED | clean scaffold, reproducible setup, tests/CI running |
 | 02 | HTTP monitor engine and persistence | APPROVED | scheduled checks, history, security tests (`68.92 MiB` 1-min SQLite storage exception accepted) |
-| 03 | Accessible dashboard | IN REVIEW | verified functional evidence and effectiveness of the [maintainer decision](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md) on merge |
-| 04 | Alerts, TLS checks, hardening | NOT STARTED | alert deduplication, SSL checks, negative security tests |
+| 03 | Accessible dashboard | CONDITIONALLY APPROVED | Functional delivery accepted via PR #15 under [ADR-0005](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md). Full FR-7 verification remains open for Phase 05. |
+| 04 | Alerts, TLS checks, hardening | IN PROGRESS | alert deduplication, SSL checks, negative security tests |
 | 05 | Packaging, documentation, public release | NOT STARTED | install, license, docs, demo, and [mandatory FR-7 accessibility gate](docs/phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate) |
 
 ## Current next actions
@@ -33,7 +34,9 @@
 - [x] Phase 03 P03-03: Squash-merge the authorized PR #12 replacement into main (798ad0276e31de66ce41f22f5321a19a98c96cde). CI run 46155308200 recorded 337 tests and 2,366 assertions per job.
 - [x] Phase 03 P03-04: Squash-merge PR #13 at `d89846b867effe016d33fc986a45ead88d01c58f`. Authorized CI run `46159162521` and post-merge run `46159905568` passed all four jobs. [Browser verification matrix](docs/audits/P03_04_ACCESSIBILITY.md)
 - [x] Phase 03 P03-05: Merge the [final acceptance audit](docs/audits/PHASE_03_FINAL_ACCEPTANCE.md) via PR #14 at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The authorized CI run `46160837252` passed all four jobs.
-- [ ] Merge the [approval documentation](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md) before recording conditional Phase 03 functional approval. Phase 04 remains NOT STARTED and requires separate authorization.
+- [x] Phase 03 conditional functional approval effective through PR #15 (`1034bd6e936aa2a25d49b8ec4f39a19a9c820439`) under [ADR-0005](docs/decisions/ADR-0005-phase-03-accessibility-release-gate.md).
+- [x] Verify the authorized Chromium check was added to active `main` ruleset `28256290` alongside the three PHP checks, all from integration `15368`.
+- [ ] Phase 04 P04-01: Review the [requirements reconciliation](docs/audits/P04_01_REQUIREMENTS_RECONCILIATION.md) and obtain explicit decisions and authorization before P04-02.
 - [ ] @ayjed to close the [mandatory accessibility release gate](docs/phases/PHASE_05_RELEASE.md#mandatory-accessibility-release-gate) before public release approval.
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.

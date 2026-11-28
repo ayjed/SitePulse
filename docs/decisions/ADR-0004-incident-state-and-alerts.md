@@ -44,6 +44,10 @@ Furthermore, SitePulse aims to run in environments without long-running queue wo
 - Users receive exactly two emails per outage: one when confirmed DOWN, and one when confirmed RECOVERED.
 - Outage metrics (MTTR, duration, incident logs) are accurate and cleanly bounded.
 
+## Reconciliation under review
+
+The [P04-01 audit](../audits/P04_01_REQUIREMENTS_RECONCILIATION.md#notification-delivery-semantics) documents the implemented database outbox, independent cron dispatcher, and the SMTP acknowledgement gap. The original decision above includes stronger external delivery wording than the implementation can demonstrate. Revised contract wording and any delivery-policy changes await maintainer approval.
+
 ## Evidence & Verification
 - Unit tests in Phase 02 and Phase 04 will simulate:
   - Alternating success/fail (flapping) verifying no alerts fire.

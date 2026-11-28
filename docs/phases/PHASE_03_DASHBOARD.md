@@ -1,6 +1,6 @@
 # Phase 03 — Dashboard
 
-**Status:** IN REVIEW (P03-01 through P03-05 merged, functional acceptance documentation pending merge)
+**Status:** CONDITIONALLY APPROVED for functional delivery, effective through PR #15 under ADR-0005
 
 ## P03-01 — Authorized Status Overview
 
@@ -104,7 +104,7 @@ PR #13 was squash-merged at `d89846b867effe016d33fc986a45ead88d01c58f`. All four
 
 The [final acceptance audit](../audits/PHASE_03_FINAL_ACCEPTANCE.md) maps the requirements to implementation and evidence. It records the incident table correction and distinguishes observed browser and accessibility results from the remaining evidence for FR-7's full WCAG 2.1 AA requirement.
 
-PR #14 was squash-merged at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The maintainer accepted the verified functional, security, database, performance and automated browser evidence on 2026-11-28. [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md) takes effect on merge of the approval documentation. Conditional Phase 03 functional approval follows that merge. The full FR-7 verification remains a [mandatory Phase 05 release gate](PHASE_05_RELEASE.md#mandatory-accessibility-release-gate).
+PR #14 was squash-merged at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The maintainer accepted the verified functional, security, database, performance and automated browser evidence on 2026-11-28. [ADR-0005](../decisions/ADR-0005-phase-03-accessibility-release-gate.md) became effective when PR #15 squash-merged at `1034bd6e936aa2a25d49b8ec4f39a19a9c820439`. The full FR-7 verification remains a [mandatory Phase 05 release gate](PHASE_05_RELEASE.md#mandatory-accessibility-release-gate).
 
 ## Scope
 - [x] Monitor list and status overview.
@@ -115,5 +115,5 @@ PR #14 was squash-merged at `df37a2ac0afe8ac93137fc2cc2c87eb269d2b7e0`. The main
 
 ## Exit criteria
 - [x] Status and history are correct for test scenarios.
-- [ ] Complete the remaining manual accessibility review at the mandatory Phase 05 gate under ADR-0005 once the approval documentation merges.
-- [ ] Record conditional functional approval when the maintainer-authorized documentation merges.
+- [ ] Complete the remaining manual accessibility review at the mandatory Phase 05 gate under ADR-0005.
+- [x] Record conditional functional approval through the maintainer-authorized PR #15 merge.

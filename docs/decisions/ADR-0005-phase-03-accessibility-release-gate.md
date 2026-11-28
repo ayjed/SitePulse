@@ -1,7 +1,7 @@
 # ADR-0005: Phase 03 functional acceptance and accessibility verification deferral
 
 **Decision:** Maintainer-authorized on 2026-11-28 by @ayjed
-**Effectiveness:** Pending merge of the approval documentation into main
+**Effectiveness:** 2026-11-28 via PR #15 at `1034bd6e936aa2a25d49b8ec4f39a19a9c820439`
 **Release gate:** Open, owned by @ayjed
 
 ## Context
@@ -15,7 +15,7 @@ The maintainer accepted Phase 03 functional, security, database, performance and
 
 ## Decision
 
-Adopt option 2. Until this documentation merges, Phase 03 remains IN REVIEW. Upon merge, Phase 03 functional delivery is conditionally approved under the maintainer's recorded decision. Phase 04 requires separate start authorization.
+Adopt option 2. PR #15 merged into main and made the maintainer's conditional approval of Phase 03 functional delivery effective. The maintainer subsequently authorized Phase 04 P04-01 only. [PR #15](https://github.com/ayjed/SitePulse/pull/15)
 
 This amendment changes the order of verification. FR-7 and its full WCAG 2.1 AA requirement remain in force. The decision establishes no conformance and waives no known defect. Existing accessibility implementation, automated regressions and historical evidence are retained. [FR-7](../REQUIREMENTS.md#37-status-dashboard-fr-7) · [WCAG 2.1 conformance](https://www.w3.org/TR/WCAG21/#conformance-reqs)
 

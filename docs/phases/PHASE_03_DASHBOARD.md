@@ -1,6 +1,6 @@
 # Phase 03 — Dashboard
 
-**Status:** IN PROGRESS (P03-01 through P03-03 merged, P03-04 authorized by the maintainer)
+**Status:** IN REVIEW (P03-01 through P03-04 merged, P03-05 final acceptance audit)
 
 ## P03-01 — Authorized Status Overview
 
@@ -98,14 +98,20 @@ The benchmark and earlier synthetic screenshots describe the original PR head. T
 
 The [browser and accessibility matrix](../audits/P03_04_ACCESSIBILITY.md) describes fixture isolation, contributor commands, regression coverage and remaining review limits.
 
+PR #13 was squash-merged at `d89846b867effe016d33fc986a45ead88d01c58f`. All four jobs passed on the approved head and resulting main commit. [Authorized run](https://github.com/ayjed/SitePulse/actions/runs/46159162521) · [Main run](https://github.com/ayjed/SitePulse/actions/runs/46159905568)
+
+## P03-05 — Final Acceptance and Evidence
+
+The [final acceptance audit](../audits/PHASE_03_FINAL_ACCEPTANCE.md) maps the requirements to implementation and evidence. It records the incident table correction and distinguishes observed browser and accessibility results from the remaining evidence for FR-7's full WCAG 2.1 AA requirement.
+
 ## Scope
 - [x] Monitor list and status overview.
 - [x] Check history, incident details and response times.
-- [ ] Responsive mobile and desktop layouts.
+- [x] Responsive mobile and desktop layouts at the tested Chromium widths and themes.
 - [ ] Accessible interaction and empty/error states.
-- [ ] Browser smoke tests.
+- [x] Browser smoke tests.
 
 ## Exit criteria
-- [ ] Status and history are correct for test scenarios.
-- [ ] Mobile/keyboard usability checked.
+- [x] Status and history are correct for test scenarios.
+- [ ] Complete mobile and keyboard usability review, including the outstanding manual and assistive-technology checks in the acceptance audit.
 - [ ] Maintainer approves visual and functional review.

@@ -20,7 +20,7 @@ uses(RefreshDatabase::class);
 
 function monitorDetailActionToken(string $html, string $action): string
 {
-    preg_match('/wire:click="'.preg_quote($action, '/').'\(\'([A-Za-z0-9_.-]+)\'\)"/', $html, $matches);
+    preg_match('/x-on:click="runHistoryAction\(\''.preg_quote($action, '/').'\', \'([A-Za-z0-9_.-]+)\'\)"/', $html, $matches);
 
     return $matches[1] ?? throw new RuntimeException("Missing $action cursor");
 }
@@ -104,21 +104,80 @@ test('detail presents no data, observed zero and distinct UTC uptime windows wit
         ->assertSee('Nov 28, 2026 12:00:00')->assertSee('UTC');
 });
 
-test('a non-perfect window near one hundred percent never renders as perfect', function () {
+test('non-extreme results stay distinct from zero and one hundred percent after rounding', function (
+    CheckResultStatus $majority,
+    CheckResultStatus $minority,
+    string $expected,
+    string $misleading,
+) {
     $owner = User::factory()->owner()->create();
     $monitor = Monitor::factory()->for($owner)->create();
     $now = CarbonImmutable::parse('2026-11-28 12:00:00', 'UTC');
     $this->actingAs($owner)->travelTo($now);
-    $row = ['monitor_id' => $monitor->id, 'checked_at' => $now, 'status' => CheckResultStatus::SUCCESS->value];
-    DB::transaction(function () use ($row, $monitor): void {
+    $row = ['monitor_id' => $monitor->id, 'checked_at' => $now, 'status' => $majority->value];
+    DB::transaction(function () use ($row, $monitor, $minority): void {
         for ($batch = 0; $batch < 80; $batch++) {
             DB::table('check_results')->insert(array_fill(0, 250, $row));
         }
-        $monitor->checkResults()->create(['checked_at' => $row['checked_at'], 'status' => CheckResultStatus::FAILURE]);
+        $monitor->checkResults()->create(['checked_at' => $row['checked_at'], 'status' => $minority]);
     });
 
     Livewire::test(MonitorDetail::class, ['monitor' => $monitor])
-        ->assertSee('>99.99%')->assertSee('20,001 completed checks')->assertDontSee('100%');
+        ->assertSee($expected)->assertSee('20,001 completed checks')->assertDontSeeHtml($misleading);
+})->with([
+    'near 100 percent' => [CheckResultStatus::SUCCESS, CheckResultStatus::FAILURE, '>99.99%', '>100%</dd>'],
+    'near zero' => [CheckResultStatus::FAILURE, CheckResultStatus::SUCCESS, '<0.01%', '>0%</dd>'],
+]);
+
+test('destructive form is behind a closed confirmation that explains its cascade', function () {
+    $owner = User::factory()->owner()->create();
+    $monitor = Monitor::factory()->for($owner)->create(['name' => 'Synthetic cascade']);
+    $check = $monitor->checkResults()->create(['checked_at' => now(), 'status' => CheckResultStatus::SUCCESS]);
+    $incident = $monitor->incidents()->create(['started_at' => now(), 'status' => IncidentStatus::OPEN]);
+
+    $html = $this->actingAs($owner)->get(route('monitors.show', $monitor))->assertOk()->getContent();
+    $document = new DOMDocument;
+    $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+    $xpath = new DOMXPath($document);
+    $disclosure = $xpath->query('//details[summary[contains(., "Delete Monitor")]]')->item(0);
+
+    expect($disclosure)->toBeInstanceOf(DOMElement::class);
+    expect($disclosure->hasAttribute('open'))->toBeFalse()
+        ->and($xpath->query('.//summary//button[@type="submit"]', $disclosure)->length)->toBe(0)
+        ->and($xpath->query('.//form[@method="POST"]/input[@name="_method"][@value="DELETE"]', $disclosure)->length)->toBe(1)
+        ->and($xpath->query('.//form/input[@name="_token"]', $disclosure)->length)->toBe(1)
+        ->and($xpath->query('.//form/button[@type="submit"][@aria-describedby="monitor-delete-warning"]', $disclosure)->length)->toBe(1)
+        ->and($disclosure->textContent)->toContain('Permanently delete Synthetic cascade and its check and incident history.');
+
+    $this->assertDatabaseHas('check_results', ['id' => $check->id]);
+    $this->assertDatabaseHas('incidents', ['id' => $incident->id]);
+    $this->post(route('monitors.destroy', $monitor), ['_method' => 'DELETE'])->assertRedirect(route('monitors.index'));
+    $this->assertDatabaseMissing('monitors', ['id' => $monitor->id]);
+    $this->assertDatabaseMissing('check_results', ['id' => $check->id]);
+    $this->assertDatabaseMissing('incidents', ['id' => $incident->id]);
+});
+
+test('incident resolution after the locked history cutoff is identified as a later record update', function () {
+    $owner = User::factory()->owner()->create();
+    $monitor = Monitor::factory()->for($owner)->create();
+    $reference = CarbonImmutable::parse('2026-11-28 12:00:00', 'UTC');
+    $this->actingAs($owner)->travelTo($reference);
+    $monitor->incidents()->create([
+        'started_at' => $reference->subMinutes(5), 'open_monitor_id' => $monitor->id,
+        'status' => IncidentStatus::OPEN, 'root_cause' => 'Synthetic incident',
+    ]);
+
+    $detail = Livewire::test(MonitorDetail::class, ['monitor' => $monitor])
+        ->assertSee('History cutoff')->assertSee('Still open')->assertSee('Ongoing duration')
+        ->assertDontSee('Resolved after the cutoff');
+
+    $this->travel(2)->minutes();
+    DB::transaction(fn () => $monitor->resolveOpenIncidentSilently($reference->addMinutes(2)));
+    $detail->call('filterIncidents', 'resolved')->assertSet('asOf', $reference->toDateTimeString())
+        ->assertSee('Status and resolution show the latest saved record.')
+        ->assertSeeInOrder(['Nov 28, 2026 12:02:00', 'Resolved after the cutoff', 'Recorded duration', '7m'])
+        ->call('refreshSnapshot')->assertSet('asOf', $reference->addMinutes(2)->toDateTimeString())
+        ->assertDontSee('Resolved after the cutoff')->assertSee('Recorded duration');
 });
 
 test('latency graph is chronological, proportional to elapsed time and preserves null and zero', function () {

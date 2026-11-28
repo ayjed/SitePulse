@@ -74,7 +74,7 @@ Local PHP 8.4 / SQLite verification passed with 334 tests and 2,332 assertions, 
 
 ### Combined detail request benchmark
 
-A loopback PHP 8.4.28 development server used an isolated SQLite 3.54.1 WAL database with 432,000 synthetic checks across ten monitored endpoints and 320 incidents. A synthetic owner used the real session-authenticated detail route and sent a signed Livewire refresh update. Each operation had one warm-up and 25 measured requests. The PHP timer covered Laravel bootstrap, middleware, queries and response rendering. The SQL timer combined observed statement times. Uncompressed response bytes include the complete HTML or Livewire JSON body.
+The measurements below were recorded at the original P03-03 review head `f42be77d750346bf781ff3684669401b7b11ebd7`. A loopback PHP 8.4.28 development server used an isolated SQLite 3.54.1 WAL database with 432,000 synthetic checks across ten monitored endpoints and 320 incidents. A synthetic owner used the real session-authenticated detail route and sent a signed Livewire refresh update. Each operation had one warm-up and 25 measured requests. The PHP timer covered Laravel bootstrap, middleware, queries and response rendering. The SQL timer combined observed statement times. Uncompressed response bytes include the complete HTML or Livewire JSON body.
 
 | Operation | SQL statements | Uptime aggregates | SQL p50 (ms) | Server p50 (ms) | Server p95 (ms) | Response bytes |
 |---|---:|---:|---:|---:|---:|---:|
@@ -82,6 +82,17 @@ A loopback PHP 8.4.28 development server used an isolated SQLite 3.54.1 WAL data
 | Livewire refresh POST | 11 | 1 | 83.70 | 429.387 | 448.084 | 105,098 |
 
 The data path issued five monitor lookups, three check queries and one incident query per request. HTTP authentication added one user lookup. The Livewire endpoint added one cache-table query with the default database cache store. PHP reserved up to 31,457,280 bytes during both operations. The measured cost is local server-side timing, with no network or browser rendering measurement. The uptime scan still grows with the number of eligible recorded checks for the monitor. The previous engine-level MySQL and SQLite benchmarks remain applicable to the unchanged MonitorHistory queries.
+
+### P03-03 closeout review
+
+- The original Delete Monitor button submitted a permanent cascade in one action. A closed native disclosure now names the monitor and explains the loss of its check and incident history before exposing a separate submit button. A client-side pending flag suppresses repeat form submission. The existing owner-authorized, CSRF-protected route handles the deletion.
+- Three rapid Enter presses on the original refresh control produced at least two Livewire refresh requests in the delayed browser fixture. The shared history-action guard permits one in-flight request across refresh, pagination and filtering. The corrected isolated trace recorded one refresh for three presses while pending, and the browser retained visible focus. Keyboard disclosure open/cancel, check pagination, incident pagination and incident filtering also passed. The confirmed cascade was exercised in a separate database test using synthetic records.
+- The monitor detail now labels the recorded reference as the history cutoff. Incident starts use that cutoff. Status and resolution use the latest saved record, and a later resolution is identified on the row. A regression resolves an incident after the locked cutoff and verifies both the later-resolution label and its disappearance after advancing the cutoff.
+- The existing signed cursor and locked-state regressions pass. Uptime tests distinguish `<0.01%` and `>99.99%` from exact `0%` and `100%`. The original CI run `46153241238` recorded 334 tests and 2,338 assertions per job before remediation.
+
+The complete local replacement suite passed with 337 tests and 2,360 assertions, including 21 detail tests and 186 assertions. Git whitespace checks, Composer validation, platform requirements and locked audit, Pint, `npm ci`, and the production build passed. The existing `esbuild` script-policy warning remains documented above.
+
+The benchmark and earlier synthetic screenshots describe the original PR head. The closeout browser capture is Git-ignored at `storage/app/private/monitor-detail-delete-confirmation.jpg`. The replacement head requires maintainer authorization before P03-03 merges or P03-04 begins.
 
 ## Scope
 - [x] Monitor list and status overview.

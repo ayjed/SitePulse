@@ -30,7 +30,7 @@
 - [x] Merge the Phase 02 documentation closeout via PR #9 (`77070bc5702d976a6b5c1537a98d8e8de4a896e5`). The historical local Windows result was 283 tests / 1,898 assertions. PR #9 CI run `46143650124` recorded 283 tests / 1,904 assertions in each of its three jobs.
 - [x] Phase 03 P03-01: Merge the owner-only monitor status overview via PR #10 (`dd53fc48928697f993f45c4777d2c3ef93114a25`). Final local verification recorded 304 tests / 2,058 assertions. PR CI run `46148897156` recorded 304 tests / 2,064 assertions in each required job.
 - [x] Phase 03 P03-02: Merge the history and uptime queries via PR #11 (`91169b7a6f26981df49eb48f90838424c097f372`). Local verification recorded 316 tests / 2,174 assertions. CI run `46150396892` recorded 316 tests / 2,180 assertions per required job.
-- [ ] Phase 03 P03-03: Review the monitor detail and visualization, including the browser evidence and required CI checks.
+- [ ] Phase 03 P03-03: Review the monitor detail closeout fixes on PR #12 and authorize the verified replacement head before merge. P03-04 follows the verified merge.
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
 - [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, Node `v26.13.0`, npm `11.20.0`).

@@ -1,4 +1,15 @@
-<div class="space-y-5">
+<div class="space-y-5" x-data="{
+    historyPending: false,
+    async runHistoryAction(action, ...parameters) {
+        if (this.historyPending) return;
+        this.historyPending = true;
+        try {
+            await this.$wire[action](...parameters);
+        } finally {
+            this.historyPending = false;
+        }
+    },
+}">
     <section aria-labelledby="main-content" class="rounded-xl border border-stone-200 bg-white shadow-xs dark:border-stone-800 dark:bg-stone-900">
         <div class="flex flex-wrap items-start justify-between gap-4 p-4 sm:p-6">
             <div class="min-w-0">
@@ -22,11 +33,28 @@
                     @csrf
                     <button type="submit" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 dark:border-stone-600 dark:hover:bg-stone-800">{{ $monitor->isPaused() ? 'Resume Monitor' : 'Pause Monitor' }}</button>
                 </form>
-                <form method="POST" action="{{ route('monitors.destroy', $monitor) }}">
-                    @csrf
-                    @method('DELETE')
-                    <button type="submit" class="min-h-[44px] rounded-md px-3 text-sm font-medium text-rose-800 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950">Delete Monitor</button>
-                </form>
+                <details class="group max-w-full">
+                    <summary class="inline-flex min-h-[44px] cursor-pointer list-none items-center rounded-md px-3 text-sm font-medium text-rose-800 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:text-rose-300 dark:hover:bg-rose-950">
+                        <span class="group-open:hidden">Delete Monitor</span>
+                        <span class="hidden group-open:inline">Cancel deletion</span>
+                    </summary>
+                    <form
+                        method="POST"
+                        action="{{ route('monitors.destroy', $monitor) }}"
+                        class="mt-2 flex max-w-xs flex-col items-start gap-3 rounded-md border border-rose-300 bg-rose-50 p-3 dark:border-rose-800 dark:bg-rose-950/40"
+                        x-data="{ deletionPending: false }"
+                        x-on:submit="if (deletionPending) { $event.preventDefault() } else { deletionPending = true }"
+                    >
+                        @csrf
+                        @method('DELETE')
+                        <p id="monitor-delete-warning" class="wrap-anywhere text-sm text-rose-950 dark:text-rose-100">
+                            Permanently delete {{ $monitor->name }} and its check and incident history.
+                        </p>
+                        <button type="submit" aria-describedby="monitor-delete-warning" x-bind:disabled="deletionPending" class="min-h-[44px] rounded-md bg-rose-800 px-3 text-sm font-medium text-white hover:bg-rose-900 disabled:opacity-60">
+                            Permanently delete monitor
+                        </button>
+                    </form>
+                </details>
             </div>
         </div>
         <dl aria-label="Monitor configuration" class="grid grid-cols-2 gap-x-6 gap-y-3 rounded-b-xl border-t border-stone-200 bg-stone-50 p-4 text-sm sm:grid-cols-3 sm:p-6 dark:border-stone-800 dark:bg-stone-950/40">
@@ -42,11 +70,11 @@
 
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-4 py-2 dark:border-stone-800 dark:bg-stone-900">
         <p class="text-sm text-stone-700 dark:text-stone-300">
-            History as of <time id="history-reference" class="font-medium tabular-nums" datetime="{{ $reference->toIso8601String() }}">{{ $reference->format('M j, Y H:i:s') }} UTC</time>
+            History cutoff <time id="history-reference" class="font-medium tabular-nums" datetime="{{ $reference->toIso8601String() }}">{{ $reference->format('M j, Y H:i:s') }} UTC</time>
         </p>
         <div class="flex flex-wrap items-center gap-3">
             <span wire:loading.delay role="status" class="text-sm text-stone-700 dark:text-stone-300">Loading history…</span>
-            <button type="button" wire:click="refreshSnapshot" wire:loading.class="opacity-70 pointer-events-none" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 disabled:opacity-60 dark:border-stone-600 dark:hover:bg-stone-800">Refresh history</button>
+            <button type="button" x-on:click="runHistoryAction('refreshSnapshot')" x-bind:aria-disabled="historyPending" wire:loading.class="opacity-70" class="min-h-[44px] rounded-md border border-stone-400 px-3 text-sm font-medium hover:bg-stone-100 dark:border-stone-600 dark:hover:bg-stone-800">Refresh history</button>
         </div>
     </div>
 
@@ -112,13 +140,14 @@
                 <h2 id="incidents-heading" class="text-lg font-semibold">Incident history</h2>
                 <label class="flex flex-wrap items-center gap-2 text-sm font-medium" for="incident-filter">
                     Status
-                    <select id="incident-filter" wire:change="filterIncidents($event.target.value)" wire:loading.class="opacity-70 pointer-events-none" class="min-h-[44px] rounded-md border border-stone-400 bg-white px-2 dark:border-stone-600 dark:bg-stone-900">
+                    <select id="incident-filter" x-on:change="runHistoryAction('filterIncidents', $el.value).finally(() => { $el.value = $wire.incidentFilter })" x-bind:aria-disabled="historyPending" wire:loading.class="opacity-70" class="min-h-[44px] rounded-md border border-stone-400 bg-white px-2 dark:border-stone-600 dark:bg-stone-900">
                         @foreach (['all' => 'All incidents', 'open' => 'Open', 'resolved' => 'Resolved'] as $value => $label)
                             <option value="{{ $value }}" @selected($incidentFilter === $value)>{{ $label }}</option>
                         @endforeach
                     </select>
                 </label>
             </div>
+            <p class="px-4 pb-4 text-sm text-stone-600 sm:px-6 dark:text-stone-300">The cutoff applies to incident start times. Status and resolution show the latest saved record.</p>
             @if ($history['incidents']->isEmpty())
                 <p class="border-t border-stone-200 px-4 py-5 text-sm text-stone-700 sm:px-6 dark:border-stone-800 dark:text-stone-300">{{ $incidentCursor === '' ? 'No incidents match this filter.' : 'No incidents on this page.' }}</p>
             @else
@@ -145,6 +174,9 @@
                                     <dd>
                                         @if ($incident->resolved_at)
                                             <time datetime="{{ $incident->resolved_at->utc()->toIso8601String() }}">{{ $incident->resolved_at->utc()->format('M j, Y H:i:s') }}</time>
+                                            @if ($incident->resolved_at->greaterThan($reference))
+                                                <span class="block text-xs text-stone-600 dark:text-stone-300">Resolved after the cutoff</span>
+                                            @endif
                                         @else
                                             {{ $isOpen ? 'Still open' : 'Not recorded' }}
                                         @endif

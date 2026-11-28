@@ -1,6 +1,6 @@
 # Phase 03 — Dashboard
 
-**Status:** IN PROGRESS (P03-01 and P03-02 merged, P03-03 authorized by the maintainer)
+**Status:** IN PROGRESS (P03-01 through P03-03 merged, P03-04 authorized by the maintainer)
 
 ## P03-01 — Authorized Status Overview
 
@@ -92,7 +92,11 @@ The data path issued five monitor lookups, three check queries and one incident 
 
 The complete local replacement suite passed with 337 tests and 2,360 assertions, including 21 detail tests and 186 assertions. Git whitespace checks, Composer validation, platform requirements and locked audit, Pint, `npm ci`, and the production build passed. The existing `esbuild` script-policy warning remains documented above.
 
-The benchmark and earlier synthetic screenshots describe the original PR head. The closeout browser capture is Git-ignored at `storage/app/private/monitor-detail-delete-confirmation.jpg`. The replacement head requires maintainer authorization before P03-03 merges or P03-04 begins.
+The benchmark and earlier synthetic screenshots describe the original PR head. The closeout browser capture is Git-ignored at `storage/app/private/monitor-detail-delete-confirmation.jpg`. The maintainer authorized replacement head 6ed3a5d20061f141a1d6ab29b13e18b8d40f65c1. CI run 46155308200 recorded 337 tests and 2,366 assertions per job. PR #12 squash-merged at 798ad0276e31de66ce41f22f5321a19a98c96cde.
+
+## P03-04 — Browser Smoke Testing and Accessibility
+
+The [browser and accessibility matrix](../audits/P03_04_ACCESSIBILITY.md) describes fixture isolation, contributor commands, regression coverage and remaining review limits.
 
 ## Scope
 - [x] Monitor list and status overview.

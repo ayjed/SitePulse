@@ -297,3 +297,49 @@ jobs:
       - name: Stop and remove MySQL 8.0 container
         if: always()
         run: docker rm -f sitepulse-ci-mysql >/dev/null 2>&1 || true
+
+  browser:
+    name: Chromium / Browser and Accessibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, mbstring, openssl, pdo_sqlite, session, tokenizer, xml, zip
+          tools: composer:v2
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install locked dependencies and build assets
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          npm ci --no-fund
+          npm run build
+
+      - name: Install Chromium
+        run: npm exec -- playwright install --with-deps chromium
+
+      - name: Run browser and accessibility tests
+        run: npm run test:browser
+
+      - name: Upload test titles and outcomes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-summary
+          path: storage/app/private/browser-summary/results.json
+          retention-days: 3
+          if-no-files-found: ignore

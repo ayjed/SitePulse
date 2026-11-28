@@ -67,7 +67,7 @@ Shared hosting compatibility is an **engineering target** that requires empirica
   - Diagnostic and status checks.
 
 ### 3.4 Cron & Task Scheduling Requirements
-- **Deployment Safety Opt-In (`SITEPULSE_SCHEDULED_CHECKS_ENABLED`):** Scheduled execution of `sitepulse:check-monitors` via Laravel's scheduler defaults to **disabled** (`config/sitepulse.php` `scheduled_checks_enabled` reads `SITEPULSE_SCHEDULED_CHECKS_ENABLED=false`). Existing `artisan schedule:run` cron jobs will skip unattended outbound probes while `schedule:list` still shows the task and manual `php artisan sitepulse:check-monitors` CLI runs remain available. Unattended scheduled checks only run once `SITEPULSE_SCHEDULED_CHECKS_ENABLED=true` is explicitly configured (and rebuilt via `php artisan config:cache` if config caching is active).
+- **Deployment Safety Opt-In (`SITEPULSE_SCHEDULED_CHECKS_ENABLED`, `SITEPULSE_ALERTS_ENABLED`, `SITEPULSE_PRUNE_CHECKS_ENABLED`):** Scheduled monitor checks (`sitepulse:check-monitors`), outbound alert email dispatch (`NotificationDispatcher`), and daily history pruning (`sitepulse:prune-checks`) all default to **disabled** (`false` in `config/sitepulse.php`). Existing `artisan schedule:run` cron jobs skip unattended network checks, outbound email delivery, and automatic database pruning until each setting is explicitly enabled (`=true`, plus `php artisan config:cache` if config caching is used). `schedule:list` and manual Artisan CLI invocations remain available.
 - **Frequency:** Once authorized and enabled, system scheduler should trigger **every 1 minute**:
   ```bash
   * * * * * php /path/to/sitepulse/artisan schedule:run >> /dev/null 2>&1

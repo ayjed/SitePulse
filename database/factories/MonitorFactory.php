@@ -39,6 +39,8 @@ class MonitorFactory extends Factory
             'last_latency_ms' => null,
             'tls_expires_at' => null,
             'tls_last_checked_at' => null,
+            'tls_warning_expires_at' => null,
+            'tls_warning_cycle' => 1,
             'revision' => 1,
         ];
     }

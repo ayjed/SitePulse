@@ -16,3 +16,12 @@ Schedule::command('sitepulse:check-monitors')
         FILTER_VALIDATE_BOOLEAN,
         FILTER_NULL_ON_FAILURE,
     ) === true);
+
+Schedule::command('sitepulse:prune-checks')
+    ->daily()
+    ->withoutOverlapping(30)
+    ->when(static fn (): bool => filter_var(
+        config('sitepulse.prune_checks_enabled', false),
+        FILTER_VALIDATE_BOOLEAN,
+        FILTER_NULL_ON_FAILURE,
+    ) === true);

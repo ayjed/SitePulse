@@ -71,7 +71,7 @@ class CheckMonitorsCommand extends Command
         }
 
         $this->info(sprintf(
-            'Monitor checks finished: due=%d started=%d completed=%d succeeded=%d failed=%d stale=%d soft_skipped=%d hard_cancelled=%d elapsed_ms=%d',
+            'Monitor checks finished: due=%d started=%d completed=%d succeeded=%d failed=%d stale=%d soft_skipped=%d hard_cancelled=%d incidents_opened=%d incidents_resolved=%d alerts_queued=%d alerts_sent=%d alerts_failed=%d elapsed_ms=%d',
             $report->dueCount,
             $report->startedCount,
             $report->completedCount,
@@ -80,6 +80,11 @@ class CheckMonitorsCommand extends Command
             $report->staleDiscardedCount,
             $report->softDeadlineSkippedCount,
             $report->hardDeadlineCancelledCount,
+            $report->incidentsOpenedCount,
+            $report->incidentsResolvedCount,
+            $report->notificationsQueuedCount,
+            $report->notificationsSentCount,
+            $report->notificationsFailedCount,
             $report->elapsedMs,
         ));
 

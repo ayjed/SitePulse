@@ -134,12 +134,14 @@ erDiagram
     USERS ||--o{ MONITORS : owns
     MONITORS ||--o{ CHECK_RESULTS : records
     MONITORS ||--o{ INCIDENTS : generates
+    MONITORS ||--o{ INCIDENT_NOTIFICATIONS : tracks
     INCIDENTS ||--o{ INCIDENT_NOTIFICATIONS : dispatches
 
     USERS {
         bigint id PK
         string name
         string email UK
+        boolean is_owner
         string password
         datetime created_at
         datetime updated_at
@@ -159,10 +161,14 @@ erDiagram
         int consecutive_failures
         int consecutive_successes
         datetime last_checked_at
+        datetime next_check_at
         int last_status_code
         int last_latency_ms
         datetime tls_expires_at
         datetime tls_last_checked_at
+        datetime tls_warning_expires_at
+        int tls_warning_cycle
+        bigint revision
         datetime created_at
         datetime updated_at
     }
@@ -173,14 +179,17 @@ erDiagram
         string status "success | failure"
         int status_code
         int latency_ms
-        string failure_reason "timeout | dns_error | ssrf_blocked | http_error | tls_error | deadline_exceeded"
+        string failure_reason "timeout | dns_error | ssrf_blocked | http_error | tls_error | deadline_exceeded | max_redirects_exceeded"
         text error_message
+        int redirects_followed
+        boolean body_truncated
         datetime checked_at
     }
 
     INCIDENTS {
         bigint id PK
         bigint monitor_id FK
+        bigint open_monitor_id UK
         datetime started_at
         datetime resolved_at
         int duration_seconds
@@ -192,12 +201,25 @@ erDiagram
 
     INCIDENT_NOTIFICATIONS {
         bigint id PK
+        bigint monitor_id FK
         bigint incident_id FK
         string type "down | recovery | tls_warning"
-        string recipient_email
+        string event_key UK
+        string channel
+        string recipient
+        string subject
+        string delivery_status "pending | sending | sent | failed"
+        int attempts
+        datetime claimed_at
+        datetime next_attempt_at
         datetime sent_at
         boolean is_success
-        text error_message
+        string error_message
+        string error_summary
+        int duration_seconds
+        datetime tls_expires_at
+        datetime created_at
+        datetime updated_at
     }
 ```
 

@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Enums\IncidentStatus;
 use App\Enums\MonitorStatus;
+use Carbon\CarbonImmutable;
 use Database\Factories\MonitorFactory;
 use DateTimeInterface;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -11,6 +13,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\DB;
 
 #[Fillable([
     'name',
@@ -77,6 +81,8 @@ class Monitor extends Model
                 'last_latency_ms',
                 'tls_expires_at',
                 'tls_last_checked_at',
+                'tls_warning_expires_at',
+                'tls_warning_cycle',
             ])) {
                 $current = (int) ($monitor->getOriginal('revision') ?? $monitor->revision ?? 1);
                 $monitor->revision = max(1, $current) + 1;
@@ -102,6 +108,36 @@ class Monitor extends Model
     public function checkResults(): HasMany
     {
         return $this->hasMany(CheckResult::class);
+    }
+
+    /**
+     * Get historical and open incidents recorded for this monitor.
+     *
+     * @return HasMany<Incident, $this>
+     */
+    public function incidents(): HasMany
+    {
+        return $this->hasMany(Incident::class);
+    }
+
+    /**
+     * Get the currently open outage incident for this monitor, if any.
+     *
+     * @return HasOne<Incident, $this>
+     */
+    public function openIncident(): HasOne
+    {
+        return $this->hasOne(Incident::class)->where('status', IncidentStatus::OPEN->value);
+    }
+
+    /**
+     * Get alert notification records created for this monitor.
+     *
+     * @return HasMany<IncidentNotification, $this>
+     */
+    public function notifications(): HasMany
+    {
+        return $this->hasMany(IncidentNotification::class);
     }
 
     /**
@@ -157,17 +193,22 @@ class Monitor extends Model
     }
 
     /**
-     * Pause this monitor, clearing transient flapping counters and eligibility while keeping check history.
+     * Pause this monitor, clearing transient flapping counters and closing any open incident without recovery alerts.
      */
     public function pause(): bool
     {
-        $this->is_active = false;
-        $this->status = MonitorStatus::PAUSED;
-        $this->consecutive_failures = 0;
-        $this->consecutive_successes = 0;
-        $this->next_check_at = null;
+        return (bool) DB::transaction(function (): bool {
+            $this->is_active = false;
+            $this->status = MonitorStatus::PAUSED;
+            $this->consecutive_failures = 0;
+            $this->consecutive_successes = 0;
+            $this->next_check_at = null;
 
-        return $this->save();
+            $saved = $this->save();
+            $this->resolveOpenIncidentSilently();
+
+            return $saved;
+        });
     }
 
     /**
@@ -175,13 +216,46 @@ class Monitor extends Model
      */
     public function resume(): bool
     {
-        $this->is_active = true;
-        $this->status = MonitorStatus::UNKNOWN;
-        $this->consecutive_failures = 0;
-        $this->consecutive_successes = 0;
-        $this->next_check_at = null;
+        return (bool) DB::transaction(function (): bool {
+            $this->is_active = true;
+            $this->status = MonitorStatus::UNKNOWN;
+            $this->consecutive_failures = 0;
+            $this->consecutive_successes = 0;
+            $this->next_check_at = null;
 
-        return $this->save();
+            $saved = $this->save();
+            $this->resolveOpenIncidentSilently();
+
+            return $saved;
+        });
+    }
+
+    /**
+     * Close any active open incident for this monitor without emitting a recovery alert.
+     */
+    public function resolveOpenIncidentSilently(?DateTimeInterface $resolvedAt = null): void
+    {
+        $resolvedTimestamp = $resolvedAt !== null
+            ? CarbonImmutable::instance($resolvedAt)->utc()
+            : now('UTC')->toImmutable();
+
+        Incident::query()
+            ->where('monitor_id', $this->getKey())
+            ->where('status', IncidentStatus::OPEN->value)
+            ->lockForUpdate()
+            ->get()
+            ->each(function (Incident $incident) use ($resolvedTimestamp): void {
+                $durationSeconds = $incident->started_at !== null
+                    ? max(0, (int) $incident->started_at->utc()->diffInSeconds($resolvedTimestamp, false))
+                    : 0;
+
+                $incident->forceFill([
+                    'status' => IncidentStatus::RESOLVED,
+                    'open_monitor_id' => null,
+                    'resolved_at' => $resolvedTimestamp,
+                    'duration_seconds' => $durationSeconds,
+                ])->save();
+            });
     }
 
     /**
@@ -197,6 +271,8 @@ class Monitor extends Model
         $this->last_latency_ms = null;
         $this->tls_expires_at = null;
         $this->tls_last_checked_at = null;
+        $this->tls_warning_expires_at = null;
+        $this->tls_warning_cycle = max(1, (int) ($this->tls_warning_cycle ?? 1)) + 1;
         $this->is_active = $active;
         $this->status = $active ? MonitorStatus::UNKNOWN : MonitorStatus::PAUSED;
     }
@@ -222,6 +298,8 @@ class Monitor extends Model
             'last_latency_ms' => 'integer',
             'tls_expires_at' => 'datetime',
             'tls_last_checked_at' => 'datetime',
+            'tls_warning_expires_at' => 'datetime',
+            'tls_warning_cycle' => 'integer',
             'revision' => 'integer',
         ];
     }

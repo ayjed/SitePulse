@@ -189,7 +189,7 @@ test('SCHED-03 & migration: upgrades unchecked monitors to unknown, orders due c
     $tempUser = User::factory()->owner()->create();
     $tempUserId = $tempUser->id;
 
-    Artisan::call('migrate:rollback', ['--step' => 3, '--no-interaction' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 6, '--no-interaction' => true]);
 
     $uncheckedId = DB::table('monitors')->insertGetId([
         'user_id' => $tempUserId,
@@ -311,7 +311,8 @@ test('SCHED-04: applies N=2 failure and M=2 recovery transitions from UNKNOWN cl
         ->and($transition->apply(MonitorStatus::PENDING_RECOVERY, 0, 1, false)->nextStatus)->toBe(MonitorStatus::DOWN)
         ->and($transition->apply(MonitorStatus::PENDING_RECOVERY, 0, 1, true)->nextStatus)->toBe(MonitorStatus::OPERATIONAL);
 
-    expect(Schema::hasTable('incidents'))->toBeFalse();
+    expect(Schema::hasTable('incidents'))->toBeTrue()
+        ->and(Schema::hasTable('incident_notifications'))->toBeTrue();
 
     Carbon::setTestNow(Carbon::parse('2026-11-27 12:00:00', 'UTC'));
     try {

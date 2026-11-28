@@ -153,27 +153,36 @@
             @if ($history['incidents']->isEmpty())
                 <p class="border-t border-stone-200 px-4 py-5 text-sm text-stone-700 sm:px-6 dark:border-stone-800 dark:text-stone-300">{{ $incidentCursor === '' ? 'No incidents match this filter.' : 'No incidents on this page.' }}</p>
             @else
-                <ul role="list" class="divide-y divide-stone-200 border-t border-stone-200 dark:divide-stone-800 dark:border-stone-800">
-                    @foreach ($history['incidents'] as $incident)
-                        @php
-                            $isOpen = $incident->status === \App\Enums\IncidentStatus::OPEN;
-                            $seconds = $isOpen ? max(0, $reference->getTimestamp() - $incident->started_at->getTimestamp()) : $incident->duration_seconds;
-                            $duration = match ($seconds) {
-                                null => 'Not recorded',
-                                0 => '0 s',
-                                default => \Carbon\CarbonInterval::seconds($seconds)->cascade()->forHumans(['short' => true]),
-                            };
-                        @endphp
-                        <li wire:key="detail-incident-{{ $incident->id }}" class="space-y-3 px-4 py-4 sm:px-6">
-                            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {{ $isOpen ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200' : 'border-stone-300 bg-stone-100 text-stone-800 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200' }}">{{ $incident->status->label() }}</span>
-                                <span class="min-w-0 wrap-anywhere text-sm font-medium">{{ $incident->root_cause ?: 'Cause not recorded' }}</span>
-                            </div>
-                            <dl class="grid gap-2 text-sm sm:grid-cols-3">
-                                <div><dt class="text-stone-600 dark:text-stone-400">Started (UTC)</dt><dd><time datetime="{{ $incident->started_at->utc()->toIso8601String() }}">{{ $incident->started_at->utc()->format('M j, Y H:i:s') }}</time></dd></div>
-                                <div>
-                                    <dt class="text-stone-600 dark:text-stone-400">Resolved (UTC)</dt>
-                                    <dd>
+                <div role="region" aria-label="Scrollable incident history" tabindex="0" class="overflow-x-auto">
+                    <table class="w-full min-w-[38rem] table-fixed border-t border-stone-200 text-left text-sm dark:border-stone-800">
+                        <caption class="sr-only">Incident history</caption>
+                        <thead class="bg-stone-50 text-stone-700 dark:bg-stone-950/50 dark:text-stone-300">
+                            <tr>
+                                <th scope="col" class="w-[16%] px-3 py-2">Status</th>
+                                <th scope="col" class="px-3 py-2">Cause</th>
+                                <th scope="col" class="w-[18%] px-3 py-2">Started (UTC)</th>
+                                <th scope="col" class="w-[22%] px-3 py-2">Resolved (UTC)</th>
+                                <th scope="col" class="w-[18%] px-3 py-2">Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-stone-200 dark:divide-stone-800">
+                            @foreach ($history['incidents'] as $incident)
+                                @php
+                                    $isOpen = $incident->status === \App\Enums\IncidentStatus::OPEN;
+                                    $seconds = $isOpen ? max(0, $reference->getTimestamp() - $incident->started_at->getTimestamp()) : $incident->duration_seconds;
+                                    $duration = match ($seconds) {
+                                        null => 'Not recorded',
+                                        0 => '0 s',
+                                        default => \Carbon\CarbonInterval::seconds($seconds)->cascade()->forHumans(['short' => true]),
+                                    };
+                                @endphp
+                                <tr wire:key="detail-incident-{{ $incident->id }}">
+                                    <td class="px-3 py-3 align-top">
+                                        <span class="inline-block rounded-full border px-2.5 py-1 text-xs font-semibold {{ $isOpen ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200' : 'border-stone-300 bg-stone-100 text-stone-800 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200' }}">{{ $incident->status->label() }}</span>
+                                    </td>
+                                    <td class="wrap-anywhere px-3 py-3 align-top">{{ $incident->root_cause ?: 'Cause not recorded' }}</td>
+                                    <td class="wrap-anywhere px-3 py-3 align-top tabular-nums"><time datetime="{{ $incident->started_at->utc()->toIso8601String() }}">{{ $incident->started_at->utc()->format('M j, Y H:i:s') }}</time></td>
+                                    <td class="wrap-anywhere px-3 py-3 align-top tabular-nums">
                                         @if ($incident->resolved_at)
                                             <time datetime="{{ $incident->resolved_at->utc()->toIso8601String() }}">{{ $incident->resolved_at->utc()->format('M j, Y H:i:s') }}</time>
                                             @if ($incident->resolved_at->greaterThan($reference))
@@ -182,13 +191,16 @@
                                         @else
                                             {{ $isOpen ? 'Still open' : 'Not recorded' }}
                                         @endif
-                                    </dd>
-                                </div>
-                                <div><dt class="text-stone-600 dark:text-stone-400">{{ $isOpen ? 'Ongoing duration' : 'Recorded duration' }}</dt><dd>{{ $duration }}</dd></div>
-                            </dl>
-                        </li>
-                    @endforeach
-                </ul>
+                                    </td>
+                                    <td class="wrap-anywhere px-3 py-3 align-top">
+                                        <span class="block text-xs text-stone-600 dark:text-stone-300">{{ $isOpen ? 'Ongoing duration' : 'Recorded duration' }}</span>
+                                        {{ $duration }}
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
             @endif
             <x-history-pagination kind="incident" action="showIncidents" :previous="$history['incidentPrevious']" :next="$history['incidentNext']" :away="$incidentCursor !== ''" />
         </section>

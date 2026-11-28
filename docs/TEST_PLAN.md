@@ -75,6 +75,8 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 
 [Browser verification instructions and accessibility matrix](audits/P03_04_ACCESSIBILITY.md) cover UI-01 through UI-04 with the isolated Chromium suite and the manual reviewer checklist.
 
+The [Phase 03 final acceptance audit](audits/PHASE_03_FINAL_ACCEPTANCE.md) records the refreshed run results, native incident table coverage, and remaining manual accessibility evidence. A passing Chromium workflow and zero axe violations do not establish full WCAG 2.1 AA conformance.
+
 ## 3. Evidence Protocol
 
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |
@@ -102,3 +104,5 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 | 2026-11-28 | `docs/phase-02-approval` (from `91562c61`, PHP 8.4.28 / Windows) | Docs-only Phase 02 closeout & full verification checklist | PASS (`283 passed, 1898 assertions`; Pint `105 files`; `0` advisories; `0` npm vulns; Vite `61 modules` built) | Recorded `@ayjed` Phase 02 formal approval (`2026-11-28`) and accepted `68.92 MiB` SQLite 1-minute 30-day storage exception while keeping `SITEPULSE_HISTORY_RETENTION_DAYS=30` unchanged and Phase 03 `NOT STARTED` |
 
 > **Rule:** Never mark a test passed without having executed the command and verified the output.
+
+P03-05 local Windows verification passed 337 PHP tests with 2,360 assertions, 17 Chromium tests (49 axe scans) and 3 targeted Firefox tests. The [acceptance audit](audits/PHASE_03_FINAL_ACCEPTANCE.md#6-verification) records the exact commands and historical versus current evidence.

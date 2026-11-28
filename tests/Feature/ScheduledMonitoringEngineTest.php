@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\Process\Process;
 
 uses(RefreshDatabase::class);
 
@@ -939,5 +940,164 @@ test('persistent monitor revision rejects same-second config edits, edit-reversi
             ->and($cleanSurvivor->fresh()->revision)->toBe(2);
     } finally {
         Carbon::setTestNow();
+    }
+});
+
+test('gates scheduled monitor execution behind SITEPULSE_SCHEDULED_CHECKS_ENABLED while preserving schedule:list, config:cache, manual CLI, and SSRF/lock protections', function () {
+    expect(config('sitepulse.scheduled_checks_enabled'))->toBeFalse();
+
+    $event = collect(app(Schedule::class)->events())
+        ->first(static fn ($item): bool => str_contains((string) $item->command, 'sitepulse:check-monitors'));
+
+    expect($event)->not->toBeNull()
+        ->and($event->filtersPass(app()))->toBeFalse();
+
+    $this->artisan('schedule:list')
+        ->expectsOutputToContain('sitepulse:check-monitors')
+        ->assertSuccessful();
+
+    // Explicit runtime opt-in enables the scheduled filter, while default false blocks it.
+    config(['sitepulse.scheduled_checks_enabled' => true]);
+    expect($event->filtersPass(app()))->toBeTrue();
+    config(['sitepulse.scheduled_checks_enabled' => false]);
+    expect($event->filtersPass(app()))->toBeFalse();
+
+    // Manual CLI invocation remains functional for controlled runs even while scheduled execution is disabled.
+    $probeCount = 0;
+    bindFakeEngine(function () use (&$probeCount): TransportResponse {
+        $probeCount++;
+
+        return makeOkTransportResponse();
+    });
+
+    $owner = User::factory()->owner()->create();
+    $manualMonitor = Monitor::factory()->for($owner)->create(['url' => 'https://manual-cli.example.test/health']);
+
+    $this->artisan('sitepulse:check-monitors')->assertSuccessful();
+    expect($probeCount)->toBe(1)
+        ->and($manualMonitor->fresh()->status)->toBe(MonitorStatus::OPERATIONAL);
+
+    // Subprocess end-to-end verification across real config:cache, schedule:list, and schedule:run in isolated temp SQLite DB.
+    if (! extension_loaded('pdo_sqlite')) {
+        return;
+    }
+
+    $token = bin2hex(random_bytes(5));
+    $workDir = sys_get_temp_dir().'/sitepulse_sched_gate_'.$token;
+    mkdir($workDir, 0777, true);
+    $tempDb = $workDir.'/test.sqlite';
+    touch($tempDb);
+    $relCacheDisabled = "storage/framework/cache/sitepulse-test-cfg-disabled-{$token}.php";
+    $relCacheEnabled = "storage/framework/cache/sitepulse-test-cfg-enabled-{$token}.php";
+    $absCacheDisabled = base_path($relCacheDisabled);
+    $absCacheEnabled = base_path($relCacheEnabled);
+
+    $runArtisan = static function (array $args, array $env): Process {
+        $baseEnv = [
+            'APP_ENV' => 'testing',
+            'APP_KEY' => 'base64:'.base64_encode(str_repeat('k', 32)),
+            'DB_CONNECTION' => 'sqlite',
+            'DB_DATABASE' => $env['DB_DATABASE'],
+            'CACHE_STORE' => 'database',
+            'CACHE_PREFIX' => 'sitepulse_test_lock_',
+            'SESSION_DRIVER' => 'array',
+        ];
+
+        $process = new Process(
+            command: [PHP_BINARY, 'artisan', ...$args],
+            cwd: base_path(),
+            env: array_merge($baseEnv, $env),
+        );
+        $process->setTimeout(30);
+        $process->run();
+
+        return $process;
+    };
+
+    try {
+        $migrate = $runArtisan(['migrate', '--force', '--no-interaction'], ['DB_DATABASE' => $tempDb]);
+        expect($migrate->getExitCode())->toBe(0, $migrate->getOutput()."\n".$migrate->getErrorOutput());
+
+        $pdo = new PDO("sqlite:{$tempDb}");
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->exec("INSERT INTO users (name, email, password, is_owner, owner_slot, created_at, updated_at) VALUES ('Owner', 'gate-owner@example.test', 'hash', 1, 1, '2026-11-28 00:00:00', '2026-11-28 00:00:00')");
+        $userId = (int) $pdo->lastInsertId();
+        $pdo->exec("INSERT INTO monitors (user_id, name, url, check_interval_minutes, timeout_seconds, expected_status_code_min, expected_status_code_max, is_active, status, consecutive_failures, consecutive_successes, revision, created_at, updated_at) VALUES ({$userId}, 'Loopback Guard Test', 'http://127.0.0.1/health', 5, 10, 200, 299, 1, 'unknown', 0, 0, 1, '2026-11-28 00:00:00', '2026-11-28 00:00:00')");
+        $monitorId = (int) $pdo->lastInsertId();
+
+        // 1) Cache config with scheduled checks disabled (even if process env later claims true, cached config wins).
+        $cacheDisabled = $runArtisan(['config:cache'], [
+            'DB_DATABASE' => $tempDb,
+            'APP_CONFIG_CACHE' => $relCacheDisabled,
+            'SITEPULSE_SCHEDULED_CHECKS_ENABLED' => 'false',
+        ]);
+        expect($cacheDisabled->getExitCode())->toBe(0, $cacheDisabled->getOutput()."\n".$cacheDisabled->getErrorOutput());
+        expect(is_file($absCacheDisabled))->toBeTrue();
+
+        $listDisabled = $runArtisan(['schedule:list'], [
+            'DB_DATABASE' => $tempDb,
+            'APP_CONFIG_CACHE' => $relCacheDisabled,
+        ]);
+        expect($listDisabled->getExitCode())->toBe(0, $listDisabled->getOutput()."\n".$listDisabled->getErrorOutput())
+            ->and($listDisabled->getOutput())->toContain('sitepulse:check-monitors');
+
+        $runDisabled = $runArtisan(['schedule:run'], [
+            'DB_DATABASE' => $tempDb,
+            'APP_CONFIG_CACHE' => $relCacheDisabled,
+            'SITEPULSE_SCHEDULED_CHECKS_ENABLED' => 'true',
+        ]);
+        expect($runDisabled->getExitCode())->toBe(0, $runDisabled->getOutput()."\n".$runDisabled->getErrorOutput())
+            ->and($runDisabled->getOutput())->toContain('No scheduled commands are ready to run');
+
+        expect((int) $pdo->query('SELECT COUNT(*) FROM check_results')->fetchColumn())->toBe(0)
+            ->and($pdo->query("SELECT status FROM monitors WHERE id = {$monitorId}")->fetchColumn())->toBe('unknown')
+            ->and($pdo->query("SELECT last_checked_at FROM monitors WHERE id = {$monitorId}")->fetchColumn())->toBeNull();
+
+        // 2) Cache config with scheduled checks explicitly enabled (overrides runtime env=false).
+        $cacheEnabled = $runArtisan(['config:cache'], [
+            'DB_DATABASE' => $tempDb,
+            'APP_CONFIG_CACHE' => $relCacheEnabled,
+            'SITEPULSE_SCHEDULED_CHECKS_ENABLED' => 'true',
+        ]);
+        expect($cacheEnabled->getExitCode())->toBe(0, $cacheEnabled->getOutput()."\n".$cacheEnabled->getErrorOutput());
+
+        // Hold active execution lock first to confirm scheduled opt-in never weakens overlap locking.
+        $expiresAt = time() + 600;
+        $lockKey = 'sitepulse_test_lock_'.MonitorCheckRunner::EXECUTION_LOCK_KEY;
+        $pdo->exec("INSERT INTO cache_locks (\"key\", \"owner\", \"expiration\") VALUES ('{$lockKey}', 'test-holder', {$expiresAt})");
+
+        $runWhileLocked = $runArtisan(['schedule:run'], [
+            'DB_DATABASE' => $tempDb,
+            'APP_CONFIG_CACHE' => $relCacheEnabled,
+            'SITEPULSE_SCHEDULED_CHECKS_ENABLED' => 'false',
+        ]);
+        expect($runWhileLocked->getExitCode())->toBe(0, $runWhileLocked->getOutput()."\n".$runWhileLocked->getErrorOutput())
+            ->and((int) $pdo->query('SELECT COUNT(*) FROM check_results')->fetchColumn())->toBe(0);
+
+        $pdo->exec('DELETE FROM cache_locks');
+
+        // Release lock and run schedule:run cleanly: executes check and strictly enforces SSRF_BLOCKED on 127.0.0.1.
+        $runEnabled = $runArtisan(['schedule:run'], [
+            'DB_DATABASE' => $tempDb,
+            'APP_CONFIG_CACHE' => $relCacheEnabled,
+            'SITEPULSE_SCHEDULED_CHECKS_ENABLED' => 'false',
+        ]);
+        expect($runEnabled->getExitCode())->toBe(0, $runEnabled->getOutput()."\n".$runEnabled->getErrorOutput())
+            ->and($runEnabled->getOutput())->toContain('sitepulse:check-monitors');
+
+        $row = $pdo->query("SELECT status, status_code, failure_reason FROM check_results WHERE monitor_id = {$monitorId}")->fetch(PDO::FETCH_ASSOC);
+        expect($row)->toBeArray()
+            ->and($row['status'])->toBe('failure')
+            ->and($row['failure_reason'])->toBe(SafeHttpFailureReason::SSRF_BLOCKED->value)
+            ->and($pdo->query("SELECT status FROM monitors WHERE id = {$monitorId}")->fetchColumn())->toBe('pending_down');
+
+        $pdo = null;
+    } finally {
+        foreach ([$absCacheDisabled, $absCacheEnabled, $tempDb, "{$tempDb}-wal", "{$tempDb}-shm"] as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
+        @rmdir($workDir);
     }
 });

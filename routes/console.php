@@ -10,4 +10,9 @@ Artisan::command('inspire', function () {
 
 Schedule::command('sitepulse:check-monitors')
     ->everyMinute()
-    ->withoutOverlapping(10);
+    ->withoutOverlapping(10)
+    ->when(static fn (): bool => filter_var(
+        config('sitepulse.scheduled_checks_enabled', false),
+        FILTER_VALIDATE_BOOLEAN,
+        FILTER_NULL_ON_FAILURE,
+    ) === true);

@@ -10,7 +10,16 @@ return [
     | Concurrency is strictly clamped to 1..max_concurrency_ceiling to protect
     | shared hosting CPU, memory, and outbound socket limits.
     |
+    | Unattended scheduled probing remains disabled by default until
+    | SITEPULSE_SCHEDULED_CHECKS_ENABLED is explicitly set to true.
+    |
     */
+    'scheduled_checks_enabled' => filter_var(
+        env('SITEPULSE_SCHEDULED_CHECKS_ENABLED', false),
+        FILTER_VALIDATE_BOOLEAN,
+        FILTER_NULL_ON_FAILURE,
+    ) === true,
+
     'max_concurrency' => max(1, min(10, (int) env('SITEPULSE_MAX_CONCURRENCY', 5))),
 
     'max_concurrency_ceiling' => 10,

@@ -2,22 +2,22 @@
 
 **Status:** IN PROGRESS
 
-**Authorized:** `2026-11-27` following maintainer approval of Phase 01 (PR #1 `d3d7ffc`, PR #2 `776333f`, PR #3 `12dbd17`), PR #4 Task 12 merge (`d1d85b8`), PR #5 Task 13 merge (`0f29c215`), and PR #6 Task 14 merge (`57ed871e`).
+**Authorized:** `2026-11-27` following maintainer approval of Phase 01 (PR #1 `d3d7ffc`, PR #2 `776333f`, PR #3 `12dbd17`). Tasks 12–15 merged into `main` via PR #4 (`d1d85b8`), PR #5 (`0f29c21`), PR #6 (`57ed871`), and PR #7 (`053ca85`).
 
-**Current task:** Task 15 — Incident Lifecycle, Alert Deduplication & History Retention (`feat/phase-02-incidents-retention`, **IN REVIEW**).
+**Current task:** Phase 02 Final Acceptance Audit (`audit/phase-02-final-acceptance`, **IN REVIEW**; Phase 02 remains **IN PROGRESS** pending maintainer approval).
 
 ## Scope
 - [x] Monitor CRUD and safe configuration validation (Task 13 **MERGED** via PR #5 `0f29c215573a64786c64208cad2e64b2210e68fd`).
 - [x] Periodic CLI checker and concurrency control (`sitepulse:check-monitors`, `MonitorCheckRunner`, `CurlMultiTransportDriver`, Task 14 **MERGED** via PR #6 `57ed871e06408b6faf748cd86e2a142f821bf099`).
-- [x] Store status, latency and incidents (`check_results` in Task 14; `incidents`, `incident_notifications`, outbox delivery, TLS expiry alerts & history pruning implemented in Task 15 **IN REVIEW**).
+- [x] Store status, latency and incidents (`check_results` in Task 14; `incidents`, `incident_notifications`, decoupled fenced delivery `sitepulse:dispatch-notifications`, TLS expiry alerts & history pruning **MERGED** via PR #7 `053ca85dd061e7caa0acea8a79d363c8eb36ddcf`).
 - [x] Strong outbound request policy resistant to SSRF (`SafeHttpClient` foundation merged in Task 12 `d1d85b8`; bounded `checkBatch` integration merged in Task 14 `57ed871e`).
-- [x] Unit/integration/security tests (`SEC-01`–`SEC-16` `Security`, `MonitorCrudTest`, `ScheduledMonitoringEngineTest`, `SafeHttpCurlIntegrationTest`, `IncidentLifecycleAndAlertsTest` `STATE-01`–`STATE-05`, and `HistoryPruningTest` implemented).
+- [x] Unit/integration/security tests (`SEC-01`–`SEC-16` `Security`, `MonitorCrudTest`, `ScheduledMonitoringEngineTest`, `SafeHttpCurlIntegrationTest`, `IncidentLifecycleAndAlertsTest`, `NotificationDispatchConcurrencyTest`, and `HistoryPruningTest` all passing on `main`).
 
 ## Exit criteria
-- [x] Monitoring scenarios verified with repeatable tests (`SCHED-01`–`SCHED-06`, loopback `curl_multi`, `STATE-01`–`STATE-05`, crash/retry/TLS/pruning suites verified locally; pending final CI & maintainer review).
+- [x] Monitoring scenarios verified with repeatable tests (`SCHED-01`–`SCHED-06`, loopback `curl_multi`, `STATE-01`–`STATE-05`, crash/retry/fencing/reconciliation/TLS/pruning suites passing across SQLite PHP 8.3/8.4 and MySQL 8.0 CI; `283 passed, 1898 assertions`).
 - [x] Private network bypass attempts blocked (`SEC-01`–`SEC-16` passing and verified in concurrent loopback `checkBatch` redirect checks).
-- [x] Failed cron/checks are observable (`check_results`, `incidents`, `incident_notifications`, sanitized logs, and escaped alert emails implemented; dashboard UI arrives in Phase 03).
-- [ ] Maintainer approves evidence.
+- [x] Failed cron/checks are observable (`check_results`, `incidents`, `incident_notifications`, sanitized logs, and escaped alert emails implemented; Phase 03 dashboard visualization remains unstarted).
+- [ ] Maintainer approves evidence (Audit report: [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](../audits/PHASE_02_FINAL_ACCEPTANCE.md)).
 
 ## Task 12 — Safe HTTP Client Foundation (`MERGED` via PR #4: `d1d85b8ceae988c36013f3220657a9ed873f3987`)
 - **Merged SHA:** `d1d85b8ceae988c36013f3220657a9ed873f3987` (`2026-11-27T21:15:59Z`; CI runs `46068385086` and `46068377174` passed 6/6 jobs with `224 passed, 965 assertions`).
@@ -53,8 +53,8 @@
   - `tests/Feature/ScheduledMonitoringEngineTest.php` (`SCHED-01`–`SCHED-06`, migration `000003` upgrade check, database overlap lock & crash TTL recovery, stale-race guards, log sanitization, and 50-monitor SQLite WAL batch persistence)
   - `tests/Integration/SafeHttpCurlIntegrationTest.php` & `tests/Support/LoopbackTestServer.php` (isolated loopback HTTP/HTTPS `curl_multi` concurrency, `CURLOPT_RESOLVE` DNS pinning, ECDSA SHA-256 TLS verification & expiry extraction, SSRF/loop/redirect/body-cap checks, and hard-deadline handle cancellation without production SSRF bypass flags)
 
-## Task 15 — Incident Lifecycle, Alert Deduplication & History Retention (`IN REVIEW`)
-- **Branch:** `feat/phase-02-incidents-retention` (from `origin/main` at `57ed871e06408b6faf748cd86e2a142f821bf099`)
+## Task 15 — Incident Lifecycle, Alert Deduplication & History Retention (`MERGED` via PR #7: `053ca85dd061e7caa0acea8a79d363c8eb36ddcf`)
+- **Merged SHA:** `053ca85dd061e7caa0acea8a79d363c8eb36ddcf` (`2026-11-28T10:17:02Z`; PR #7 head `87be52c3f0018498a280868e8aeb9c1c33960f94`, CI `46133968179` & `46133964903` passed 6/6 jobs, post-merge `main` CI `46134436723` passed 3/3 jobs across `PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, and `PHP 8.3 / MySQL 8.0`).
 - **SQLite & MySQL-Compatible Incident & Notification Outbox Schema:**
   - `database/migrations/2026_11_28_000006_add_tls_warning_tracking_to_monitors_table.php` (`tls_warning_expires_at`, `tls_warning_cycle`)
   - `database/migrations/2026_11_28_000007_create_incidents_table.php` (`open_monitor_id` nullable unique lock column enforcing single open incident per monitor portably across SQLite and MySQL 8.0+)
@@ -67,8 +67,8 @@
 - **Check-History Retention Pruning:**
   - `App\Support\Monitoring\CheckHistoryPruner` & `App\Console\Commands\PruneChecksCommand` (`sitepulse:prune-checks`): portable PK-chunked deletion strictly older than `SITEPULSE_HISTORY_RETENTION_DAYS=30`, overlap lock protection, and full preservation of `incidents` and `incident_notifications`
   - `routes/console.php`: daily `sitepulse:prune-checks` schedule gated behind opt-in `SITEPULSE_PRUNE_CHECKS_ENABLED=false` and every-minute `sitepulse:dispatch-notifications` gated behind `SITEPULSE_ALERTS_ENABLED=true && SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED=true`
-- **Automated Verification:**
+- **Automated Verification & Audit Notes:**
   - `tests/Feature/IncidentLifecycleAndAlertsTest.php` (`STATE-01`–`STATE-05`, SMTP failure/retry/crash recovery, stale check guards, pause/URL/delete cleanup, TLS 14d warning/renewal cycle, XSS/credential sanitization, owner-only recipients, `SITEPULSE_ALERTS_ENABLED=false` default)
-  - `tests/Feature/NotificationDispatchConcurrencyTest.php` (active claim contention, stale-worker completion & failure fencing, SMTP crash-window recovery, retry exhaustion, `MonitorCheckRunner`/SMTP decoupling, bounded `--limit`/`--deadline`, overlap lock, independent opt-ins & `config:cache` parity)
+  - `tests/Feature/NotificationDispatchConcurrencyTest.php` (active claim contention, stale-worker completion & failure fencing, final-attempt stale reconciliation, SMTP crash-window recovery, retry exhaustion, `MonitorCheckRunner`/SMTP decoupling, bounded `--limit`/`--deadline`, overlap lock, independent opt-ins & `config:cache` parity)
   - `tests/Feature/HistoryPruningTest.php` (exact 30-day boundary, chunked SQLite/MySQL-portable deletion, incident/notification preservation, idempotency, CLI validation, overlap lock, opt-in daily schedule)
-  - Draft PR #7 pending remote CI (`PHP 8.3 / SQLite`, `PHP 8.4 / SQLite`, `PHP 8.3 / MySQL 8.0`) and independent review; Phase 02 remains **IN PROGRESS**.
+  - Empirical audit benchmark (`audit/phase-02-final-acceptance`) measured `68.92 MiB` SQLite WAL footprint for `432,000` 1-minute `check_results` rows over 30 days (exceeding `<= 50 MB` target); Phase 02 remains **IN PROGRESS** pending maintainer acceptance in [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](../audits/PHASE_02_FINAL_ACCEPTANCE.md).

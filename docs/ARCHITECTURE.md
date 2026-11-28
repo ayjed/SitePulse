@@ -117,9 +117,9 @@ The `SafeHttpClient` isolates and enforces:
 - **Alert Generation:** Dispatched exclusively when a transition creates or closes an incident.
 
 ### 2.4 Notification Subsystem
-- Dispatches transactional alert emails on state transitions.
-- Records all sent alerts in `incident_notifications` with unique composite keys `(incident_id, type)` ensuring exact-once notification semantics.
-- Outbound SMTP connections bounded by a 5-second socket timeout.
+- Queues state-transition and TLS-warning alert records atomically inside `CheckBatchPersister` transactions into `incident_notifications`, and dispatches emails strictly asynchronously from check execution via `php artisan sitepulse:dispatch-notifications` (`NotificationDispatcher`).
+- Records alerts with `UNIQUE(event_key)` and composite `UNIQUE(incident_id, type)`, using cryptographic `claim_token` and monotonic `claim_version` fencing plus stale final-attempt reconciliation outside database locks. Because SMTP transport runs outside DB transactions, a crash after remote SMTP acceptance recovers after `notification_claim_timeout_seconds`, giving **at-least-once** external delivery semantics rather than strict exactly-once SMTP transmission.
+- Outbound SMTP connections are strictly capped at 5 seconds (`config/mail.php`), and unattended delivery stays disabled unless both `SITEPULSE_ALERTS_ENABLED=true` and `SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED=true`.
 
 ### 2.5 Data Pruning Subsystem
 - Daily scheduled task `sitepulse:prune-checks` purges records in `check_results` older than `SITEPULSE_HISTORY_RETENTION_DAYS` (default: 30 days).
@@ -231,12 +231,12 @@ erDiagram
 
 | Metric | Target | Status & Verification Method |
 |---|---|---|
-| **CLI Memory Footprint** | $\le 45\text{ MB}$ peak usage | Target to be measured via `memory_get_peak_usage(true)` in CI |
-| **Check Latency Budget** | 50 monitors checked in $\le 25\text{ seconds}$ | Target via bounded concurrent worker pool (concurrency 5) |
-| **Storage Footprint** | $\le 50\text{ MB}$ for 10 monitors over 30 days | Target under SQLite WAL; measured in Phase 02 |
-| **SQLite Lock Contention** | Reduced contention between CLI writes & Web reads | Target via WAL mode, busy timeout, and batch writes; requires Phase 02 benchmarks |
-| **Database Portability** | 100% schema parity on SQLite and MySQL 8.0+ | Requires automated CI integration testing |
-| **Shared Hosting Compatibility** | Viable operation on CLI-enabled shared hosts | Target requiring empirical deployment testing before release |
+| **CLI Memory Footprint** | $\le 45\text{ MB}$ peak usage | **PASS (Phase 02 Benchmark):** `40 MB` real (`39.32 MB` emalloc) at concurrency 5; `42 MB` real at concurrency 10 |
+| **Check Latency Budget** | 50 monitors checked in $\le 25\text{ seconds}$ | **PASS (Phase 02 Benchmark):** `760.76 ms` wall (`732 ms` runner) @ concurrency 5 on 50ms loopback endpoints |
+| **Storage Footprint** | $\le 50\text{ MB}$ for 10 monitors over 30 days | **TARGET EXCEEDED @ 1-min:** `68.92 MiB` (`72,265,728` bytes) for 432K rows in SQLite WAL audit; mitigation documented |
+| **SQLite Lock Contention** | Reduced contention between CLI writes & Web reads | **PASS:** WAL (`5000 ms` busy timeout) + `2.08x` faster batch persistence (`67.67 ms` vs `140.61 ms` sequential) |
+| **Database Portability** | 100% schema parity on SQLite and MySQL 8.0+ | **PASS:** Verified on PHP 8.3/8.4 SQLite WAL and PHP 8.3 MySQL 8.0 CI (`283 passed, 1898 assertions`) |
+| **Shared Hosting Compatibility** | Viable operation on CLI-enabled shared hosts | Target requiring empirical deployment testing before release (Phase 05) |
 
 ---
 

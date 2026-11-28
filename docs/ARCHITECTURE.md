@@ -218,6 +218,8 @@ erDiagram
         string error_summary
         int duration_seconds
         datetime tls_expires_at
+        string claim_token
+        bigint claim_version
         datetime created_at
         datetime updated_at
     }

@@ -24,6 +24,8 @@ return new class extends Migration
             $table->string('delivery_status', 16)->default(NotificationDeliveryStatus::PENDING->value);
             $table->unsignedInteger('attempts')->default(0);
             $table->timestamp('claimed_at')->nullable();
+            $table->string('claim_token', 64)->nullable();
+            $table->unsignedBigInteger('claim_version')->default(0);
             $table->timestamp('next_attempt_at')->nullable();
             $table->timestamp('sent_at')->nullable();
             $table->boolean('is_success')->default(false);

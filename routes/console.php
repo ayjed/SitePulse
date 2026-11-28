@@ -17,6 +17,19 @@ Schedule::command('sitepulse:check-monitors')
         FILTER_NULL_ON_FAILURE,
     ) === true);
 
+Schedule::command('sitepulse:dispatch-notifications')
+    ->everyMinute()
+    ->withoutOverlapping(10)
+    ->when(static fn (): bool => filter_var(
+        config('sitepulse.alerts_enabled', false),
+        FILTER_VALIDATE_BOOLEAN,
+        FILTER_NULL_ON_FAILURE,
+    ) === true && filter_var(
+        config('sitepulse.scheduled_notifications_enabled', false),
+        FILTER_VALIDATE_BOOLEAN,
+        FILTER_NULL_ON_FAILURE,
+    ) === true);
+
 Schedule::command('sitepulse:prune-checks')
     ->daily()
     ->withoutOverlapping(30)

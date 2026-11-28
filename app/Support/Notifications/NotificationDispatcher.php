@@ -9,133 +9,234 @@ use App\Models\Monitor;
 use App\Models\User;
 use App\Support\Monitoring\CheckBatchPersister;
 use Carbon\CarbonImmutable;
+use Closure;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use InvalidArgumentException;
 use Throwable;
 
 /**
  * Dispatches durable incident notification outbox records strictly outside DB transactions and row locks.
+ *
+ * Security and concurrency invariants:
+ * - Each claim atomically assigns a fresh cryptographic `claim_token` and increments fencing `claim_version`.
+ * - Every post-claim completion or failure update checks `(id, delivery_status='sending', claim_token, claim_version)`
+ *   so an expired stale worker can never overwrite a newer worker's terminal or active state.
+ * - Pre-claim monotonic `hrtime(true)` deadline checks bound work per run; however, synchronous PHP mail/SMTP
+ *   calls cannot be forcibly preempted mid-socket write and rely on the <= 5s transport timeout (`config/mail.php`).
+ * - Crashes after remote SMTP acceptance and before fenced DB acknowledgement recover via `claim_timeout_seconds`,
+ *   providing durable at-least-once delivery semantics rather than guaranteed exactly-once SMTP transmission.
  */
 final class NotificationDispatcher
 {
+    public const EXECUTION_LOCK_KEY = 'sitepulse:dispatch-notifications:execution';
+
+    /** @var Closure(): int */
+    private readonly Closure $monotonicClockNs;
+
     /**
-     * Dispatch up to $limit due pending, retryable failed, or stale claimed notifications.
-     *
-     * Uses short per-row atomic claim updates before Mail delivery so SMTP waits never hold DB locks.
-     * Note: if a process crashes after SMTP acceptance before final DB state update, stale claim recovery
-     * provides at-least-once delivery rather than guaranteed exactly-once external email transmission.
-     *
-     * @return array{alertsEnabled: bool, claimed: int, sent: int, failed: int}
+     * @param  (Closure(): int)|null  $monotonicClockNs
      */
-    public function dispatchPending(int $limit = 25): array
+    public function __construct(?Closure $monotonicClockNs = null)
     {
+        $this->monotonicClockNs = $monotonicClockNs ?? static fn (): int => hrtime(true);
+    }
+
+    /**
+     * Dispatch bounded pending, retryable failed, or stale timed-out notifications under an execution lock.
+     *
+     * @return array{
+     *     alertsEnabled: bool,
+     *     lockAcquired: bool,
+     *     claimed: int,
+     *     sent: int,
+     *     failed: int,
+     *     fenced: int,
+     *     deadlineReached: bool,
+     *     elapsedMs: int
+     * }
+     */
+    public function dispatchPending(?int $limit = null, int|float|null $deadlineSeconds = null): array
+    {
+        $startedAtNs = $this->nowNs();
+
+        if ($limit !== null && $limit < 1) {
+            throw new InvalidArgumentException('Notification dispatch limit must be a positive integer.');
+        }
+
+        if ($deadlineSeconds !== null && $deadlineSeconds <= 0) {
+            throw new InvalidArgumentException('Notification dispatch deadline must be positive.');
+        }
+
         if (filter_var(config('sitepulse.alerts_enabled', false), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) !== true) {
             return [
                 'alertsEnabled' => false,
+                'lockAcquired' => true,
                 'claimed' => 0,
                 'sent' => 0,
                 'failed' => 0,
+                'fenced' => 0,
+                'deadlineReached' => false,
+                'elapsedMs' => $this->elapsedMs($startedAtNs),
             ];
         }
 
-        $effectiveLimit = max(1, min(100, $limit));
+        $maxLimitCeiling = max(1, (int) config('sitepulse.notification_max_limit', 100));
+        $configuredLimit = $limit ?? (int) config('sitepulse.notification_batch_limit', 25);
+        $effectiveLimit = max(1, min($maxLimitCeiling, $configuredLimit));
+
+        $maxDeadlineCeiling = max(1, (int) config('sitepulse.notification_max_deadline_seconds', 55));
+        $configuredDeadline = $deadlineSeconds ?? (int) config('sitepulse.notification_deadline_seconds', 25);
+        $effectiveDeadlineSeconds = min($maxDeadlineCeiling, max(0.001, (float) $configuredDeadline));
+        $deadlineNs = $startedAtNs + (int) round($effectiveDeadlineSeconds * 1_000_000_000);
+
+        $lockTtlSeconds = max(30, (int) config('sitepulse.notification_lock_ttl_seconds', 300));
+        $lockStore = config('sitepulse.lock_store');
+        $lock = Cache::store(is_string($lockStore) && $lockStore !== '' ? $lockStore : null)
+            ->lock(self::EXECUTION_LOCK_KEY, $lockTtlSeconds);
+
+        if (! $lock->get()) {
+            $elapsedMs = $this->elapsedMs($startedAtNs);
+            Log::info('SitePulse notification dispatch skipped because an execution lock is already active.', [
+                'lock_acquired' => false,
+                'elapsed_ms' => $elapsedMs,
+            ]);
+
+            return [
+                'alertsEnabled' => true,
+                'lockAcquired' => false,
+                'claimed' => 0,
+                'sent' => 0,
+                'failed' => 0,
+                'fenced' => 0,
+                'deadlineReached' => false,
+                'elapsedMs' => $elapsedMs,
+            ];
+        }
+
         $maxAttempts = max(1, (int) config('sitepulse.notification_max_attempts', 3));
         $claimTimeoutSeconds = max(15, (int) config('sitepulse.notification_claim_timeout_seconds', 60));
         $baseBackoffSeconds = max(5, (int) config('sitepulse.notification_retry_backoff_seconds', 60));
 
-        $now = CarbonImmutable::instance(now('UTC'))->utc();
-        $nowFormatted = $now->format('Y-m-d H:i:s');
-        $staleClaimCutoffFormatted = $now->subSeconds($claimTimeoutSeconds)->format('Y-m-d H:i:s');
-
-        $candidateIds = IncidentNotification::query()
-            ->where(function (Builder $query) use ($nowFormatted, $staleClaimCutoffFormatted, $maxAttempts): void {
-                $this->applyClaimableFilter($query, $nowFormatted, $staleClaimCutoffFormatted, $maxAttempts);
-            })
-            ->orderBy('id')
-            ->limit($effectiveLimit)
-            ->pluck('id')
-            ->all();
-
         $claimedCount = 0;
         $sentCount = 0;
         $failedCount = 0;
+        $fencedCount = 0;
+        $deadlineReached = false;
 
-        foreach ($candidateIds as $notificationId) {
-            $claimTimestamp = CarbonImmutable::instance(now('UTC'))->utc();
-            $claimNowFormatted = $claimTimestamp->format('Y-m-d H:i:s');
-            $claimStaleFormatted = $claimTimestamp->subSeconds($claimTimeoutSeconds)->format('Y-m-d H:i:s');
+        try {
+            $now = CarbonImmutable::instance(now('UTC'))->utc();
+            $nowFormatted = $now->format('Y-m-d H:i:s');
+            $staleClaimCutoffFormatted = $now->subSeconds($claimTimeoutSeconds)->format('Y-m-d H:i:s');
 
-            $claimed = IncidentNotification::query()
-                ->whereKey($notificationId)
-                ->where(function (Builder $query) use ($claimNowFormatted, $claimStaleFormatted, $maxAttempts): void {
-                    $this->applyClaimableFilter($query, $claimNowFormatted, $claimStaleFormatted, $maxAttempts);
+            $candidateIds = IncidentNotification::query()
+                ->where(function (Builder $query) use ($nowFormatted, $staleClaimCutoffFormatted, $maxAttempts): void {
+                    $this->applyClaimableFilter($query, $nowFormatted, $staleClaimCutoffFormatted, $maxAttempts);
                 })
-                ->update([
-                    'delivery_status' => NotificationDeliveryStatus::SENDING->value,
-                    'attempts' => DB::raw('attempts + 1'),
-                    'claimed_at' => $claimNowFormatted,
-                    'updated_at' => $claimNowFormatted,
-                ]);
+                ->orderBy('id')
+                ->limit($effectiveLimit)
+                ->pluck('id')
+                ->all();
 
-            if ($claimed !== 1) {
-                continue;
-            }
+            foreach ($candidateIds as $notificationId) {
+                if ($this->nowNs() >= $deadlineNs) {
+                    $deadlineReached = true;
 
-            $claimedCount++;
+                    break;
+                }
 
-            /** @var IncidentNotification|null $notification */
-            $notification = IncidentNotification::query()
-                ->with(['monitor.user', 'incident'])
-                ->find($notificationId);
+                $claimTimestamp = CarbonImmutable::instance(now('UTC'))->utc();
+                $claimNowFormatted = $claimTimestamp->format('Y-m-d H:i:s');
+                $claimStaleFormatted = $claimTimestamp->subSeconds($claimTimeoutSeconds)->format('Y-m-d H:i:s');
+                $claimToken = bin2hex(random_bytes(32));
 
-            if ($notification === null) {
-                continue;
-            }
-
-            $monitor = $notification->monitor;
-            $owner = $monitor?->user;
-
-            if (! $monitor instanceof Monitor || ! $owner instanceof User || ! $owner->isOwner() || trim((string) $owner->email) === '') {
-                $this->markPermanentFailure($notification, 'No verified site owner recipient is available.');
-                $failedCount++;
-
-                continue;
-            }
-
-            // Always resolve target recipient server-side from the verified single owner account.
-            $recipientEmail = trim((string) $owner->email);
-            $occurredAt = $notification->created_at !== null
-                ? CarbonImmutable::instance($notification->created_at)->utc()
-                : $claimTimestamp;
-            $tlsExpiresAt = $notification->tls_expires_at !== null
-                ? CarbonImmutable::instance($notification->tls_expires_at)->utc()
-                : null;
-            $summary = $notification->error_summary ?? $notification->incident?->root_cause;
-            $durationSeconds = $notification->duration_seconds ?? $notification->incident?->duration_seconds;
-
-            $mailable = new SitePulseAlertMail(
-                alertType: $notification->type,
-                monitorName: (string) $monitor->name,
-                monitorUrl: (string) $monitor->url,
-                occurredAt: $occurredAt,
-                summary: $summary,
-                durationSeconds: $durationSeconds,
-                tlsExpiresAt: $tlsExpiresAt,
-            );
-
-            try {
-                Mail::to($recipientEmail)->send($mailable);
-
-                $sentAtFormatted = CarbonImmutable::instance(now('UTC'))->utc()->format('Y-m-d H:i:s');
-
-                IncidentNotification::query()
+                $claimed = IncidentNotification::query()
                     ->whereKey($notificationId)
+                    ->where(function (Builder $query) use ($claimNowFormatted, $claimStaleFormatted, $maxAttempts): void {
+                        $this->applyClaimableFilter($query, $claimNowFormatted, $claimStaleFormatted, $maxAttempts);
+                    })
                     ->update([
+                        'delivery_status' => NotificationDeliveryStatus::SENDING->value,
+                        'attempts' => DB::raw('attempts + 1'),
+                        'claimed_at' => $claimNowFormatted,
+                        'claim_token' => $claimToken,
+                        'claim_version' => DB::raw('claim_version + 1'),
+                        'updated_at' => $claimNowFormatted,
+                    ]);
+
+                if ($claimed !== 1) {
+                    continue;
+                }
+
+                /** @var IncidentNotification|null $notification */
+                $notification = IncidentNotification::query()
+                    ->with(['monitor.user', 'incident'])
+                    ->find($notificationId);
+
+                if ($notification === null || $notification->claim_token !== $claimToken) {
+                    $fencedCount++;
+
+                    continue;
+                }
+
+                $ownedClaimVersion = (int) $notification->claim_version;
+                $claimedCount++;
+
+                $monitor = $notification->monitor;
+                $owner = $monitor?->user;
+
+                if (! $monitor instanceof Monitor || ! $owner instanceof User || ! $owner->isOwner() || trim((string) $owner->email) === '') {
+                    $fenced = ! $this->markPermanentFailure(
+                        notification: $notification,
+                        claimToken: $claimToken,
+                        claimVersion: $ownedClaimVersion,
+                        message: 'No verified site owner recipient is available.',
+                    );
+
+                    if ($fenced) {
+                        $fencedCount++;
+                    } else {
+                        $failedCount++;
+                    }
+
+                    continue;
+                }
+
+                // Always resolve target recipient server-side from the verified single owner account.
+                $recipientEmail = trim((string) $owner->email);
+                $occurredAt = $notification->created_at !== null
+                    ? CarbonImmutable::instance($notification->created_at)->utc()
+                    : $claimTimestamp;
+                $tlsExpiresAt = $notification->tls_expires_at !== null
+                    ? CarbonImmutable::instance($notification->tls_expires_at)->utc()
+                    : null;
+                $summary = $notification->error_summary ?? $notification->incident?->root_cause;
+                $durationSeconds = $notification->duration_seconds ?? $notification->incident?->duration_seconds;
+
+                $mailable = new SitePulseAlertMail(
+                    alertType: $notification->type,
+                    monitorName: (string) $monitor->name,
+                    monitorUrl: (string) $monitor->url,
+                    occurredAt: $occurredAt,
+                    summary: $summary,
+                    durationSeconds: $durationSeconds,
+                    tlsExpiresAt: $tlsExpiresAt,
+                );
+
+                try {
+                    // External mail transport executes strictly outside DB transactions and row locks.
+                    Mail::to($recipientEmail)->send($mailable);
+
+                    $sentAtFormatted = CarbonImmutable::instance(now('UTC'))->utc()->format('Y-m-d H:i:s');
+
+                    $updated = $this->fencedUpdate($notificationId, $claimToken, $ownedClaimVersion, [
                         'recipient' => $recipientEmail,
                         'delivery_status' => NotificationDeliveryStatus::SENT->value,
                         'claimed_at' => null,
+                        'claim_token' => null,
                         'next_attempt_at' => null,
                         'sent_at' => $sentAtFormatted,
                         'is_success' => true,
@@ -143,21 +244,28 @@ final class NotificationDispatcher
                         'updated_at' => $sentAtFormatted,
                     ]);
 
-                $sentCount++;
-            } catch (Throwable $exception) {
-                $attemptNumber = max(1, (int) $notification->attempts);
-                $backoffSeconds = $baseBackoffSeconds * (2 ** max(0, $attemptNumber - 1));
-                $failedAt = CarbonImmutable::instance(now('UTC'))->utc();
-                $nextAttemptAtFormatted = $attemptNumber < $maxAttempts
-                    ? $failedAt->addSeconds($backoffSeconds)->format('Y-m-d H:i:s')
-                    : null;
-                $sanitizedError = CheckBatchPersister::sanitizeErrorMessage($exception->getMessage());
+                    if ($updated === 1) {
+                        $sentCount++;
+                    } else {
+                        $fencedCount++;
+                        Log::warning('SitePulse stale notification worker lost claim ownership on delivery completion.', [
+                            'notification_id' => $notificationId,
+                            'claim_version' => $ownedClaimVersion,
+                        ]);
+                    }
+                } catch (Throwable $exception) {
+                    $attemptNumber = max(1, (int) $notification->attempts);
+                    $backoffSeconds = $baseBackoffSeconds * (2 ** max(0, $attemptNumber - 1));
+                    $failedAt = CarbonImmutable::instance(now('UTC'))->utc();
+                    $nextAttemptAtFormatted = $attemptNumber < $maxAttempts
+                        ? $failedAt->addSeconds($backoffSeconds)->format('Y-m-d H:i:s')
+                        : null;
+                    $sanitizedError = CheckBatchPersister::sanitizeErrorMessage($exception->getMessage());
 
-                IncidentNotification::query()
-                    ->whereKey($notificationId)
-                    ->update([
+                    $updated = $this->fencedUpdate($notificationId, $claimToken, $ownedClaimVersion, [
                         'delivery_status' => NotificationDeliveryStatus::FAILED->value,
                         'claimed_at' => null,
+                        'claim_token' => null,
                         'next_attempt_at' => $nextAttemptAtFormatted,
                         'sent_at' => null,
                         'is_success' => false,
@@ -165,25 +273,59 @@ final class NotificationDispatcher
                         'updated_at' => $failedAt->format('Y-m-d H:i:s'),
                     ]);
 
-                Log::warning('SitePulse alert notification delivery failed.', [
-                    'notification_id' => $notificationId,
-                    'monitor_id' => $notification->monitor_id,
-                    'type' => $notification->type->value,
-                    'attempts' => $attemptNumber,
-                    'max_attempts' => $maxAttempts,
-                    'error' => $sanitizedError,
-                ]);
+                    if ($updated === 1) {
+                        Log::warning('SitePulse alert notification delivery failed.', [
+                            'notification_id' => $notificationId,
+                            'monitor_id' => $notification->monitor_id,
+                            'type' => $notification->type->value,
+                            'attempts' => $attemptNumber,
+                            'max_attempts' => $maxAttempts,
+                            'error' => $sanitizedError,
+                        ]);
 
-                $failedCount++;
+                        $failedCount++;
+                    } else {
+                        $fencedCount++;
+                        Log::warning('SitePulse stale notification worker lost claim ownership on failure update.', [
+                            'notification_id' => $notificationId,
+                            'claim_version' => $ownedClaimVersion,
+                        ]);
+                    }
+                }
+            }
+
+            if ($this->nowNs() >= $deadlineNs && $candidateIds !== []) {
+                $deadlineReached = true;
+            }
+
+            $elapsedMs = $this->elapsedMs($startedAtNs);
+
+            Log::info('SitePulse notification dispatch cycle finished.', [
+                'claimed' => $claimedCount,
+                'sent' => $sentCount,
+                'failed' => $failedCount,
+                'fenced' => $fencedCount,
+                'deadline_reached' => $deadlineReached,
+                'elapsed_ms' => $elapsedMs,
+            ]);
+
+            return [
+                'alertsEnabled' => true,
+                'lockAcquired' => true,
+                'claimed' => $claimedCount,
+                'sent' => $sentCount,
+                'failed' => $failedCount,
+                'fenced' => $fencedCount,
+                'deadlineReached' => $deadlineReached,
+                'elapsedMs' => $elapsedMs,
+            ];
+        } finally {
+            try {
+                $lock->release();
+            } catch (Throwable) {
+                // Best-effort unlock; TTL guarantees automatic expiration on abrupt termination.
             }
         }
-
-        return [
-            'alertsEnabled' => true,
-            'claimed' => $claimedCount,
-            'sent' => $sentCount,
-            'failed' => $failedCount,
-        ];
     }
 
     /**
@@ -219,22 +361,52 @@ final class NotificationDispatcher
             });
     }
 
-    private function markPermanentFailure(IncidentNotification $notification, string $message): void
-    {
+    private function markPermanentFailure(
+        IncidentNotification $notification,
+        string $claimToken,
+        int $claimVersion,
+        string $message,
+    ): bool {
         $maxAttempts = max(1, (int) config('sitepulse.notification_max_attempts', 3));
         $nowFormatted = CarbonImmutable::instance(now('UTC'))->utc()->format('Y-m-d H:i:s');
 
-        IncidentNotification::query()
-            ->whereKey($notification->getKey())
-            ->update([
-                'delivery_status' => NotificationDeliveryStatus::FAILED->value,
-                'attempts' => max((int) $notification->attempts, $maxAttempts),
-                'claimed_at' => null,
-                'next_attempt_at' => null,
-                'sent_at' => null,
-                'is_success' => false,
-                'error_message' => CheckBatchPersister::sanitizeErrorMessage($message),
-                'updated_at' => $nowFormatted,
-            ]);
+        $updated = $this->fencedUpdate((int) $notification->getKey(), $claimToken, $claimVersion, [
+            'delivery_status' => NotificationDeliveryStatus::FAILED->value,
+            'attempts' => max((int) $notification->attempts, $maxAttempts),
+            'claimed_at' => null,
+            'claim_token' => null,
+            'next_attempt_at' => null,
+            'sent_at' => null,
+            'is_success' => false,
+            'error_message' => CheckBatchPersister::sanitizeErrorMessage($message),
+            'updated_at' => $nowFormatted,
+        ]);
+
+        return $updated === 1;
+    }
+
+    /**
+     * Update a claimed notification only while this worker still holds exact fencing ownership.
+     *
+     * @param  array<string, mixed>  $attributes
+     */
+    private function fencedUpdate(int $notificationId, string $claimToken, int $claimVersion, array $attributes): int
+    {
+        return IncidentNotification::query()
+            ->whereKey($notificationId)
+            ->where('delivery_status', NotificationDeliveryStatus::SENDING->value)
+            ->where('claim_token', $claimToken)
+            ->where('claim_version', $claimVersion)
+            ->update($attributes);
+    }
+
+    private function nowNs(): int
+    {
+        return ($this->monotonicClockNs)();
+    }
+
+    private function elapsedMs(int $startedAtNs): int
+    {
+        return max(0, (int) round(($this->nowNs() - $startedAtNs) / 1_000_000));
     }
 }

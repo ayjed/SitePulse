@@ -23,7 +23,5 @@ final readonly class MonitorRunReport
         public int $incidentsOpenedCount = 0,
         public int $incidentsResolvedCount = 0,
         public int $notificationsQueuedCount = 0,
-        public int $notificationsSentCount = 0,
-        public int $notificationsFailedCount = 0,
     ) {}
 }

@@ -40,7 +40,23 @@ return [
         FILTER_NULL_ON_FAILURE,
     ) === true,
 
+    'scheduled_notifications_enabled' => filter_var(
+        env('SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED', false),
+        FILTER_VALIDATE_BOOLEAN,
+        FILTER_NULL_ON_FAILURE,
+    ) === true,
+
     'tls_expiry_warning_days' => max(1, (int) env('SITEPULSE_TLS_EXPIRY_WARNING_DAYS', 14)),
+
+    'notification_batch_limit' => max(1, min(100, (int) env('SITEPULSE_NOTIFICATION_BATCH_LIMIT', 25))),
+
+    'notification_max_limit' => 100,
+
+    'notification_deadline_seconds' => max(1, min(55, (int) env('SITEPULSE_NOTIFICATION_DEADLINE_SECONDS', 25))),
+
+    'notification_max_deadline_seconds' => 55,
+
+    'notification_lock_ttl_seconds' => 300,
 
     'notification_max_attempts' => max(1, (int) env('SITEPULSE_NOTIFICATION_MAX_ATTEMPTS', 3)),
 

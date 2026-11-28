@@ -3,7 +3,6 @@
 namespace App\Support\Monitoring;
 
 use App\Models\Monitor;
-use App\Support\Notifications\NotificationDispatcher;
 use App\Support\SafeHttp\BatchCheckOutcome;
 use App\Support\SafeHttp\BatchCheckTarget;
 use App\Support\SafeHttp\SafeHttpClient;
@@ -31,7 +30,6 @@ final class MonitorCheckRunner
         private readonly SafeHttpClient $safeHttpClient,
         private readonly CheckBatchPersister $persister = new CheckBatchPersister,
         ?Closure $monotonicClockNs = null,
-        private readonly NotificationDispatcher $notificationDispatcher = new NotificationDispatcher,
     ) {
         $this->monotonicClockNs = $monotonicClockNs ?? static fn (): int => hrtime(true);
     }
@@ -104,14 +102,10 @@ final class MonitorCheckRunner
             $dueCount = $dueMonitors->count();
 
             if ($dueCount === 0) {
-                // Allow pending or due retry outbox alerts to dispatch even on cycles with zero due monitors.
-                $dispatchStats = $this->notificationDispatcher->dispatchPending();
                 $elapsedMs = $this->elapsedMs($startedAtNs);
                 Log::info('SitePulse monitor check run completed with no due monitors.', [
                     'due_count' => 0,
                     'concurrency' => $effectiveConcurrency,
-                    'notifications_sent_count' => $dispatchStats['sent'],
-                    'notifications_failed_count' => $dispatchStats['failed'],
                     'elapsed_ms' => $elapsedMs,
                 ]);
 
@@ -128,11 +122,6 @@ final class MonitorCheckRunner
                     elapsedMs: $elapsedMs,
                     softDeadlineReached: false,
                     hardDeadlineReached: false,
-                    incidentsOpenedCount: 0,
-                    incidentsResolvedCount: 0,
-                    notificationsQueuedCount: 0,
-                    notificationsSentCount: $dispatchStats['sent'],
-                    notificationsFailedCount: $dispatchStats['failed'],
                 );
             }
 
@@ -267,9 +256,6 @@ final class MonitorCheckRunner
 
             $flushBuffer();
 
-            // Dispatch queued/retryable alert notifications strictly outside check persistence transactions and row locks.
-            $dispatchStats = $this->notificationDispatcher->dispatchPending();
-
             $elapsedMs = $this->elapsedMs($startedAtNs);
             $softDeadlineReached = $softDeadlineSkippedCount > 0 || $hardDeadlineCancelledCount > 0 || $this->nowNs() >= $softDeadlineNs;
             $hardDeadlineReached = $hardDeadlineCancelledCount > 0 || $this->nowNs() >= $hardDeadlineNs;
@@ -286,8 +272,6 @@ final class MonitorCheckRunner
                 'incidents_opened_count' => $incidentsOpenedCount,
                 'incidents_resolved_count' => $incidentsResolvedCount,
                 'notifications_queued_count' => $notificationsQueuedCount,
-                'notifications_sent_count' => $dispatchStats['sent'],
-                'notifications_failed_count' => $dispatchStats['failed'],
                 'concurrency' => $effectiveConcurrency,
                 'soft_deadline_reached' => $softDeadlineReached,
                 'hard_deadline_reached' => $hardDeadlineReached,
@@ -310,8 +294,6 @@ final class MonitorCheckRunner
                 incidentsOpenedCount: $incidentsOpenedCount,
                 incidentsResolvedCount: $incidentsResolvedCount,
                 notificationsQueuedCount: $notificationsQueuedCount,
-                notificationsSentCount: $dispatchStats['sent'],
-                notificationsFailedCount: $dispatchStats['failed'],
             );
         } finally {
             try {

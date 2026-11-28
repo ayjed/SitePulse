@@ -173,11 +173,15 @@ test('STATE-02, STATE-03, STATE-04: confirms outage at N=2, deduplicates prolong
         expect(Incident::query()->count())->toBe(0);
         Mail::assertNothingSent();
 
-        // 2nd failure: 10:12 -> DOWN, opens incident + dispatches 1 DOWN email
+        // 2nd failure: 10:12 -> DOWN, opens incident & queues 1 DOWN outbox notification without sending SMTP inline
         Carbon::setTestNow('2026-11-28 10:12:00');
         $run2 = $runner->run();
         expect($run2->incidentsOpenedCount)->toBe(1)
-            ->and($run2->notificationsSentCount)->toBe(1);
+            ->and($run2->notificationsQueuedCount)->toBe(1);
+        Mail::assertNothingSent();
+
+        // Dedicated dispatcher sends the queued DOWN email cleanly.
+        $this->artisan('sitepulse:dispatch-notifications')->assertSuccessful();
 
         $incident = Incident::query()->firstOrFail();
         expect($incident->status)->toBe(IncidentStatus::OPEN)
@@ -190,6 +194,7 @@ test('STATE-02, STATE-03, STATE-04: confirms outage at N=2, deduplicates prolong
         foreach (['2026-11-28 10:18:00', '2026-11-28 10:24:00', '2026-11-28 10:30:00'] as $ts) {
             Carbon::setTestNow($ts);
             $runner->run();
+            $this->artisan('sitepulse:dispatch-notifications')->assertSuccessful();
         }
 
         expect(Incident::query()->count())->toBe(1)
@@ -200,15 +205,19 @@ test('STATE-02, STATE-03, STATE-04: confirms outage at N=2, deduplicates prolong
         // M=1 success at 10:36 -> PENDING_RECOVERY, still open
         Carbon::setTestNow('2026-11-28 10:36:00');
         $runner->run();
+        $this->artisan('sitepulse:dispatch-notifications')->assertSuccessful();
         expect($incident->fresh()->status)->toBe(IncidentStatus::OPEN)
             ->and($monitor->fresh()->status)->toBe(MonitorStatus::PENDING_RECOVERY);
 
-        // M=2 success at 10:42 -> OPERATIONAL, closes incident (30m = 1800s downtime) + 1 RECOVERY email
+        // M=2 success at 10:42 -> OPERATIONAL, closes incident (30m = 1800s downtime) & queues RECOVERY outbox record
         Carbon::setTestNow('2026-11-28 10:42:00');
         $runRecover = $runner->run();
 
         expect($runRecover->incidentsResolvedCount)->toBe(1)
-            ->and($runRecover->notificationsSentCount)->toBe(1);
+            ->and($runRecover->notificationsQueuedCount)->toBe(1);
+        Mail::assertSentCount(1);
+
+        $this->artisan('sitepulse:dispatch-notifications')->assertSuccessful();
 
         $resolved = $incident->fresh();
         expect($resolved->status)->toBe(IncidentStatus::RESOLVED)

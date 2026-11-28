@@ -49,6 +49,7 @@ class IncidentNotification extends Model
             'delivery_status' => NotificationDeliveryStatus::class,
             'attempts' => 'integer',
             'claimed_at' => 'datetime',
+            'claim_version' => 'integer',
             'next_attempt_at' => 'datetime',
             'sent_at' => 'datetime',
             'is_success' => 'boolean',

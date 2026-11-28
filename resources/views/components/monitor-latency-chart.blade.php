@@ -44,7 +44,8 @@
 
         <details wire:key="latency-sample-table" class="mt-4 rounded-md border border-stone-200 dark:border-stone-800">
             <summary class="min-h-[44px] cursor-pointer rounded-md px-3 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">Latency data table</summary>
-            <table class="w-full border-t border-stone-200 text-left text-sm dark:border-stone-800">
+            <div role="region" aria-label="Scrollable latency samples" tabindex="0" class="overflow-x-auto">
+            <table class="w-full min-w-[14rem] border-t border-stone-200 text-left text-sm dark:border-stone-800">
                 <caption class="sr-only">Latency samples in chronological order</caption>
                 <thead class="bg-stone-50 dark:bg-stone-950/50"><tr><th scope="col" class="p-2 pl-3">Check (UTC)</th><th scope="col" class="p-2">Latency</th></tr></thead>
                 <tbody class="divide-y divide-stone-200 dark:divide-stone-800">
@@ -56,6 +57,7 @@
                     @endforeach
                 </tbody>
             </table>
+            </div>
         </details>
     @endif
 </section>

@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 03 — Accessible dashboard (P03-03 authorized)
+**Current phase:** 03 — Accessible dashboard (P03-04 authorized)
 **Project status:** IN PROGRESS (Phase 02 approved 2026-11-28)
 **Approved by:** @ayjed (Phase 01 approved 2026-11-27; Phase 02 approved 2026-11-28)
 **Approval date:** 2026-11-28
 **Last reviewed:** 2026-11-28
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `codex/phase-03-dashboard-visualization` (from `main` `91169b7`; `https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `codex/phase-03-browser-accessibility` (from `main` `798ad02`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -30,7 +30,8 @@
 - [x] Merge the Phase 02 documentation closeout via PR #9 (`77070bc5702d976a6b5c1537a98d8e8de4a896e5`). The historical local Windows result was 283 tests / 1,898 assertions. PR #9 CI run `46143650124` recorded 283 tests / 1,904 assertions in each of its three jobs.
 - [x] Phase 03 P03-01: Merge the owner-only monitor status overview via PR #10 (`dd53fc48928697f993f45c4777d2c3ef93114a25`). Final local verification recorded 304 tests / 2,058 assertions. PR CI run `46148897156` recorded 304 tests / 2,064 assertions in each required job.
 - [x] Phase 03 P03-02: Merge the history and uptime queries via PR #11 (`91169b7a6f26981df49eb48f90838424c097f372`). Local verification recorded 316 tests / 2,174 assertions. CI run `46150396892` recorded 316 tests / 2,180 assertions per required job.
-- [ ] Phase 03 P03-03: Review the monitor detail closeout fixes on PR #12 and authorize the verified replacement head before merge. P03-04 follows the verified merge.
+- [x] Phase 03 P03-03: Squash-merge the authorized PR #12 replacement into main (798ad0276e31de66ce41f22f5321a19a98c96cde). CI run 46155308200 recorded 337 tests and 2,366 assertions per job.
+- [ ] Phase 03 P03-04: Review browser smoke and accessibility evidence in [the verification matrix](docs/audits/P03_04_ACCESSIBILITY.md). Local verification passed 17 Chromium tests and 49 axe scans, with 337 PHP tests and 2,360 assertions.
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
 - [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, Node `v26.13.0`, npm `11.20.0`).

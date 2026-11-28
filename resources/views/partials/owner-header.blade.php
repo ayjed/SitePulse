@@ -1,6 +1,6 @@
 <header class="border-b border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
     <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-        <nav aria-label="Primary" class="flex items-center gap-6">
+        <nav aria-label="Primary" class="flex flex-wrap items-center gap-x-6">
             <a
                 href="{{ route('dashboard') }}"
                 @if (request()->routeIs('dashboard')) aria-current="page" @endif
@@ -18,8 +18,8 @@
             </a>
         </nav>
 
-        <div class="flex items-center gap-4">
-            <span class="text-sm text-stone-700 dark:text-stone-300">
+        <div class="flex min-w-0 flex-wrap items-center gap-4">
+            <span class="wrap-anywhere text-sm text-stone-700 dark:text-stone-300">
                 {{ $owner->name }} ({{ $owner->email }})
             </span>
 

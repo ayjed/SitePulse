@@ -73,6 +73,8 @@ Automated tests executed against mock sockets and DNS fakes (no live public egre
 
 ---
 
+[Browser verification instructions and accessibility matrix](audits/P03_04_ACCESSIBILITY.md) cover UI-01 through UI-04 with the isolated Chromium suite and the manual reviewer checklist.
+
 ## 3. Evidence Protocol
 
 | Date | Commit / Branch | Test Command | Result | Evidence Notes |

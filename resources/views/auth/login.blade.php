@@ -29,7 +29,7 @@
             @endphp
 
             @if ($authErrorMessage)
-                <div id="login-error" role="alert" aria-live="assertive" class="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-900 dark:border-red-800 dark:bg-red-950/60 dark:text-red-200">
+                <div id="login-error" tabindex="-1" data-focus-error role="alert" aria-live="assertive" class="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-900 dark:border-red-800 dark:bg-red-950/60 dark:text-red-200">
                     {{ $authErrorMessage }}
                 </div>
             @endif
@@ -56,12 +56,11 @@
                         autocorrect="off"
                         enterkeyhint="next"
                         required
-                        autofocus
                         @if ($authErrorMessage)
                             aria-invalid="true"
                             aria-describedby="login-error"
                         @endif
-                        class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+                        class="min-h-[48px] w-full rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
                     >
                 </div>
 
@@ -72,7 +71,7 @@
                     <p id="password-hint" class="text-xs text-stone-600 dark:text-stone-400">
                         Enter the owner password created via CLI setup.
                     </p>
-                    <div class="flex gap-2">
+                    <div class="flex flex-wrap gap-2">
                         <input
                             id="password"
                             name="password"
@@ -84,7 +83,7 @@
                                 aria-invalid="true"
                             @endif
                             aria-describedby="password-hint{{ $authErrorMessage ? ' login-error' : '' }}"
-                            class="min-h-[48px] flex-1 rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-600 dark:bg-stone-950 dark:text-stone-50"
+                            class="min-h-[48px] min-w-0 flex-1 rounded-md border border-stone-500 bg-white px-3.5 py-2.5 text-base text-stone-950 dark:border-stone-500 dark:bg-stone-950 dark:text-stone-50"
                         >
                         <button
                             type="button"

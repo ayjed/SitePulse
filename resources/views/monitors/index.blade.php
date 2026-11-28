@@ -47,7 +47,7 @@
                     </a>
                 </section>
             @else
-                <section class="mt-6 overflow-x-auto rounded-lg border border-stone-200 bg-white shadow-xs dark:border-stone-800 dark:bg-stone-900">
+                <section aria-label="Configured monitors" tabindex="0" class="mt-6 overflow-x-auto rounded-lg border border-stone-200 bg-white shadow-xs dark:border-stone-800 dark:bg-stone-900">
                     <table class="w-full border-collapse text-left text-sm">
                         <caption class="sr-only">Configured HTTP and HTTPS monitors</caption>
                         <thead class="border-b border-stone-200 bg-stone-50 text-xs font-semibold uppercase tracking-wide text-stone-700 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-300">

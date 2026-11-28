@@ -600,7 +600,6 @@ test('TLS 14-day warnings trigger independently, deduplicate until renewal, rear
                     redirectsFollowed: 0,
                     tlsExpiresAt: $firstExpiry,
                 ),
-                tlsExpiringSoon: true,
                 includeResponse: false,
             ),
             'checkedAt' => CarbonImmutable::parse('2026-11-29 10:00:00', 'UTC'),
@@ -642,7 +641,6 @@ test('TLS 14-day warnings trigger independently, deduplicate until renewal, rear
                     redirectsFollowed: 0,
                     tlsExpiresAt: $renewedExpiry,
                 ),
-                tlsExpiringSoon: false,
                 includeResponse: false,
             ),
             'checkedAt' => CarbonImmutable::parse('2026-12-01 10:00:00', 'UTC'),
@@ -669,7 +667,6 @@ test('TLS 14-day warnings trigger independently, deduplicate until renewal, rear
                     redirectsFollowed: 0,
                     tlsExpiresAt: $renewedExpiry,
                 ),
-                tlsExpiringSoon: true,
                 includeResponse: false,
             ),
             'checkedAt' => CarbonImmutable::parse('2027-02-16 10:00:00', 'UTC'),
@@ -762,4 +759,127 @@ test('alerts stay disabled by default on schedule:run and alert rendering escape
         ->and($nonOwnerNotification->delivery_status)->toBe(NotificationDeliveryStatus::FAILED)
         ->and($nonOwnerNotification->is_success)->toBeFalse();
     Mail::assertNothingSent();
+});
+
+test('uses the configured inclusive UTC TLS warning boundary at stored precision', function (int $days, int $seconds, bool $warn) {
+    config(['sitepulse.tls_expiry_warning_days' => $days]);
+    $owner = User::factory()->owner()->create();
+    $monitor = Monitor::factory()->for($owner)->operational()->create(['url' => 'https://origin.example.test/status']);
+    $checkedAt = CarbonImmutable::parse('2026-11-28T10:00:00.100000+02:00');
+    $expiry = $checkedAt->utc()->startOfSecond()->addDays($days)->addSeconds($seconds)
+        ->addMicroseconds(900000)->setTimezone('-05:00');
+
+    app(CheckBatchPersister::class)->persistBatch([[
+        'snapshot' => MonitorProbeSnapshot::fromMonitor($monitor),
+        'result' => SafeHttpCheckResult::failure(
+            reason: SafeHttpFailureReason::HTTP_ERROR,
+            errorMessage: 'Unexpected HTTP status',
+            finalUrl: $monitor->url,
+            latencyMs: 20,
+            statusCode: 503,
+            tlsExpiresAt: $expiry,
+        ),
+        'checkedAt' => $checkedAt,
+    ]]);
+
+    $monitor->refresh();
+    expect($monitor->tls_last_checked_at->utc()->toDateTimeString())->toBe('2026-11-28 08:00:00')
+        ->and($monitor->tls_expires_at->utc()->toDateTimeString())->toBe($expiry->utc()->toDateTimeString())
+        ->and($monitor->tls_warning_expires_at?->utc()->toDateTimeString())->toBe($warn ? $expiry->utc()->toDateTimeString() : null)
+        ->and(IncidentNotification::query()->where('type', IncidentNotificationType::TLS_WARNING)->count())->toBe((int) $warn);
+})->with([
+    '14 days below' => [14, -1, true],
+    '14 days equal' => [14, 0, true],
+    '14 days above' => [14, 1, false],
+    '3 days below' => [3, -1, true],
+    '3 days equal' => [3, 0, true],
+    '3 days above' => [3, 1, false],
+]);
+
+test('preserves TLS history across missing observations and deduplicates replacement by expiry and cycle', function () {
+    config(['sitepulse.tls_expiry_warning_days' => 14]);
+    $owner = User::factory()->owner()->create();
+    $monitor = Monitor::factory()->for($owner)->operational()->create(['url' => 'https://origin.example.test/status']);
+    $persister = app(CheckBatchPersister::class);
+    $time = CarbonImmutable::parse('2026-11-28 12:00:00', 'UTC');
+    $first = $time->addDays(2);
+    $inside = $time->addDays(5);
+    $observe = function (?CarbonImmutable $expiry, int $minutes, string $issuer = 'CN=Synthetic CA') use ($monitor, $persister, $time): void {
+        $persister->persistBatch([[
+            'snapshot' => MonitorProbeSnapshot::fromMonitor($monitor->fresh()),
+            'result' => SafeHttpCheckResult::success(new SafeHttpResponse(
+                finalUrl: $monitor->url, resolvedIp: '93.184.216.34', statusCode: 200,
+                headers: [], body: '', bodyTruncated: false, bytesReceived: 0,
+                latencyMs: 12, redirectsFollowed: 0, tlsExpiresAt: $expiry, tlsIssuer: $issuer,
+            )),
+            'checkedAt' => $time->addMinutes($minutes),
+        ]]);
+    };
+    $observe($first, 0);
+    $observe(null, 1);
+    $monitor->refresh();
+    expect($monitor->tls_expires_at?->getTimestamp())->toBe($first->getTimestamp())
+        ->and($monitor->tls_last_checked_at?->getTimestamp())->toBe($time->getTimestamp())
+        ->and($monitor->tls_warning_expires_at?->getTimestamp())->toBe($first->getTimestamp())
+        ->and($monitor->tls_warning_cycle)->toBe(1)
+        ->and(IncidentNotification::query()->count())->toBe(1);
+
+    $observe($inside, 2);
+    $observe($inside, 3, 'CN=Replacement with identical expiry');
+    expect(IncidentNotification::query()->orderBy('id')->pluck('event_key')->all())->toBe([
+        "monitor:{$monitor->id}:tls:c1:{$first->getTimestamp()}",
+        "monitor:{$monitor->id}:tls:c1:{$inside->getTimestamp()}",
+    ]);
+
+    $observe($time->addDays(30), 4);
+    $observe(null, 5);
+    $monitor->refresh();
+    expect($monitor->tls_warning_cycle)->toBe(2)
+        ->and($monitor->tls_warning_expires_at)->toBeNull()
+        ->and($monitor->tls_last_checked_at?->getTimestamp())->toBe($time->addMinutes(4)->getTimestamp());
+    $observe($inside, 6);
+    expect(IncidentNotification::query()->latest('id')->value('event_key'))
+        ->toBe("monitor:{$monitor->id}:tls:c2:{$inside->getTimestamp()}");
+});
+
+test('discards old HTTPS TLS observations after a URL reset and ignores metadata on an HTTP origin', function () {
+    $owner = User::factory()->owner()->create();
+    $monitor = Monitor::factory()->for($owner)->operational()->create(['url' => 'https://origin.example.test/status']);
+    $persister = app(CheckBatchPersister::class);
+    $time = CarbonImmutable::parse('2026-11-28 12:00:00', 'UTC');
+    $result = SafeHttpCheckResult::success(new SafeHttpResponse(
+        finalUrl: $monitor->url, resolvedIp: '93.184.216.34', statusCode: 200,
+        headers: [], body: '', bodyTruncated: false, bytesReceived: 0,
+        latencyMs: 12, redirectsFollowed: 0, tlsExpiresAt: $time->addDays(2),
+    ));
+
+    $persister->persistBatch([[
+        'snapshot' => MonitorProbeSnapshot::fromMonitor($monitor),
+        'result' => $result,
+        'checkedAt' => $time,
+    ]]);
+    $snapshot = MonitorProbeSnapshot::fromMonitor($monitor->fresh());
+    $monitor->refresh();
+    $monitor->url = 'http://origin.example.test/status';
+    $monitor->resetTelemetryForUrlChange(true);
+    $monitor->save();
+    $monitor->refresh();
+
+    $stale = $persister->persistBatch([[
+        'snapshot' => $snapshot, 'result' => $result, 'checkedAt' => $time->addSecond(),
+    ]]);
+    expect($stale['staleDiscarded'])->toBe(1)
+        ->and($stale['persisted'])->toBe(0);
+
+    $persister->persistBatch([[
+        'snapshot' => MonitorProbeSnapshot::fromMonitor($monitor),
+        'result' => $result,
+        'checkedAt' => $time->addMinute(),
+    ]]);
+    $monitor->refresh();
+    expect($monitor->tls_expires_at)->toBeNull()
+        ->and($monitor->tls_last_checked_at)->toBeNull()
+        ->and($monitor->tls_warning_expires_at)->toBeNull()
+        ->and($monitor->tls_warning_cycle)->toBe(2)
+        ->and(IncidentNotification::query()->where('type', IncidentNotificationType::TLS_WARNING)->count())->toBe(1);
 });

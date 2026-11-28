@@ -8,8 +8,6 @@ use App\Support\SafeHttp\Contracts\DnsResolverInterface;
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
 use App\Support\SafeHttp\Contracts\MultiTransportDriverInterface;
 use Closure;
-use DateTimeImmutable;
-use DateTimeZone;
 use InvalidArgumentException;
 use Throwable;
 
@@ -33,8 +31,6 @@ class SafeHttpClient
     public const MAX_REDIRECTS = 3;
 
     public const MAX_BODY_BYTES = 512000;
-
-    public const TLS_EXPIRY_WARNING_DAYS = 14;
 
     public const DEFAULT_USER_AGENT = 'SitePulse/1.0 (+https://github.com/ayjed/SitePulse)';
 
@@ -117,6 +113,17 @@ class SafeHttpClient
         int $timeoutSeconds = self::DEFAULT_TIMEOUT_SECONDS,
         string $method = 'GET',
     ): SafeHttpResponse {
+        $originTls = null;
+
+        return $this->requestWithOriginTls($url, $timeoutSeconds, $method, $originTls);
+    }
+
+    private function requestWithOriginTls(
+        string $url,
+        int $timeoutSeconds,
+        string $method,
+        ?VerifiedTlsMetadata &$originTls,
+    ): SafeHttpResponse {
         $this->assertValidTimeout($timeoutSeconds);
         $normalizedMethod = $this->normalizeMethod($method);
 
@@ -139,6 +146,7 @@ class SafeHttpClient
                 deadlineNs: $deadlineNs,
                 startedAtNs: $startedAtNs,
                 transportResponse: $transportResponse,
+                originTls: $originTls,
             );
 
             if (isset($evaluation['response'])) {
@@ -163,8 +171,10 @@ class SafeHttpClient
     ): SafeHttpCheckResult {
         $startedAtNs = $this->nowNs();
 
+        $originTls = null;
+
         try {
-            $response = $this->request($url, $timeoutSeconds, $method);
+            $response = $this->requestWithOriginTls($url, $timeoutSeconds, $method, $originTls);
 
             return $this->buildCheckResultFromResponse(
                 response: $response,
@@ -173,7 +183,7 @@ class SafeHttpClient
                 includeResponse: true,
             );
         } catch (BlockedDestinationException|SafeHttpRequestException $exception) {
-            return $this->buildFailureResultFromException($exception, $url, $startedAtNs);
+            return $this->buildFailureResultFromException($exception, $url, $startedAtNs, $originTls);
         }
     }
 
@@ -224,7 +234,7 @@ class SafeHttpClient
         $total = count($queue);
         $nextIndex = 0;
 
-        /** @var array<int, array{target: BatchCheckTarget, method: string, startedAtNs: int, deadlineNs: int, visitedKeys: array<string, bool>, redirectsFollowed: int, validated: ValidatedUrl, pinnedIp: string}> $activeStates */
+        /** @var array<int, array{target: BatchCheckTarget, method: string, startedAtNs: int, deadlineNs: int, visitedKeys: array<string, bool>, redirectsFollowed: int, validated: ValidatedUrl, pinnedIp: string, originTls: ?VerifiedTlsMetadata}> $activeStates */
         $activeStates = [];
         /** @var array<int, BatchCheckOutcome> $outcomes */
         $outcomes = [];
@@ -291,6 +301,7 @@ class SafeHttpClient
                     'redirectsFollowed' => 0,
                     'validated' => $hop['validated'],
                     'pinnedIp' => $hop['pinnedIp'],
+                    'originTls' => null,
                 ];
 
                 return [
@@ -325,6 +336,7 @@ class SafeHttpClient
                     deadlineNs: $state['deadlineNs'],
                     startedAtNs: $state['startedAtNs'],
                     transportResponse: $transportResponse,
+                    originTls: $state['originTls'],
                 );
 
                 if (isset($evaluation['response'])) {
@@ -381,7 +393,7 @@ class SafeHttpClient
                     return null;
                 }
 
-                $result = $this->buildFailureResultFromException($exception, $target->url, $state['startedAtNs']);
+                $result = $this->buildFailureResultFromException($exception, $target->url, $state['startedAtNs'], $state['originTls']);
                 $emitOutcome($index, new BatchCheckOutcome($target, $result, false));
 
                 return null;
@@ -492,6 +504,7 @@ class SafeHttpClient
         int $deadlineNs,
         int $startedAtNs,
         TransportResponse $transportResponse,
+        ?VerifiedTlsMetadata &$originTls,
     ): array {
         if ($transportResponse->primaryIp !== null && $transportResponse->primaryIp !== '') {
             $this->assertConnectedPeerValid($transportResponse->primaryIp, $pinnedIp);
@@ -511,6 +524,11 @@ class SafeHttpClient
         }
 
         $this->assertConnectedPeerValid($transportResponse->primaryIp, $pinnedIp);
+
+        // Only the initial validated host and port may supply the origin observation.
+        if ($redirectsFollowed === 0 && $validated->scheme === 'https') {
+            $originTls = VerifiedTlsMetadata::fromCertificateInfo($transportResponse->certInfo);
+        }
 
         $location = $this->extractFirstHeaderValue($transportResponse->headers, 'location');
         if ($this->isRedirectStatus($transportResponse->statusCode) && $location !== null) {
@@ -534,7 +552,6 @@ class SafeHttpClient
             ];
         }
 
-        [$tlsExpiresAt, $tlsIssuer] = $this->extractTlsMetadata($validated, $transportResponse->certInfo);
         $latencyMs = $this->elapsedMs($startedAtNs);
 
         return [
@@ -548,8 +565,8 @@ class SafeHttpClient
                 bytesReceived: $transportResponse->bytesReceived,
                 latencyMs: $latencyMs,
                 redirectsFollowed: $redirectsFollowed,
-                tlsExpiresAt: $tlsExpiresAt,
-                tlsIssuer: $tlsIssuer,
+                tlsExpiresAt: $originTls?->expiresAt,
+                tlsIssuer: $originTls?->issuer,
             ),
         ];
     }
@@ -560,8 +577,6 @@ class SafeHttpClient
         int $expectedStatusMax,
         bool $includeResponse = true,
     ): SafeHttpCheckResult {
-        $tlsExpiringSoon = $response->isTlsExpiringSoon(self::TLS_EXPIRY_WARNING_DAYS);
-
         if ($response->statusCode < $expectedStatusMin || $response->statusCode > $expectedStatusMax) {
             return SafeHttpCheckResult::failure(
                 reason: SafeHttpFailureReason::HTTP_ERROR,
@@ -573,19 +588,19 @@ class SafeHttpClient
                 redirectsFollowed: $response->redirectsFollowed,
                 tlsExpiresAt: $response->tlsExpiresAt,
                 tlsIssuer: $response->tlsIssuer,
-                tlsExpiringSoon: $tlsExpiringSoon,
                 bodyTruncated: $response->bodyTruncated,
                 bytesReceived: $response->bytesReceived,
             );
         }
 
-        return SafeHttpCheckResult::success($response, $tlsExpiringSoon, $includeResponse);
+        return SafeHttpCheckResult::success($response, $includeResponse);
     }
 
     private function buildFailureResultFromException(
         BlockedDestinationException|SafeHttpRequestException $exception,
         string $url,
         int $startedAtNs,
+        ?VerifiedTlsMetadata $originTls = null,
     ): SafeHttpCheckResult {
         $reason = $exception instanceof BlockedDestinationException
             ? SafeHttpFailureReason::SSRF_BLOCKED
@@ -596,6 +611,8 @@ class SafeHttpClient
             errorMessage: $this->sanitizeErrorMessage($exception),
             finalUrl: $this->sanitizeUrlForReport($url),
             latencyMs: $this->elapsedMs($startedAtNs),
+            tlsExpiresAt: $originTls?->expiresAt,
+            tlsIssuer: $originTls?->issuer,
         );
     }
 
@@ -718,50 +735,6 @@ class SafeHttpClient
         $value = trim((string) $values[0]);
 
         return $value === '' ? null : $value;
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $certInfo
-     * @return array{0: ?DateTimeImmutable, 1: ?string}
-     */
-    private function extractTlsMetadata(ValidatedUrl $validated, array $certInfo): array
-    {
-        if ($validated->scheme !== 'https' || $certInfo === []) {
-            return [null, null];
-        }
-
-        $leaf = $certInfo[0] ?? null;
-        if (! is_array($leaf)) {
-            return [null, null];
-        }
-
-        $issuer = is_string($leaf['Issuer'] ?? null) ? trim($leaf['Issuer']) : null;
-        $expiresAt = null;
-
-        if (isset($leaf['validTo_time_t']) && is_numeric($leaf['validTo_time_t'])) {
-            $expiresAt = DateTimeImmutable::createFromFormat(
-                'U',
-                (string) ((int) $leaf['validTo_time_t']),
-                new DateTimeZone('UTC')
-            ) ?: null;
-        } elseif (is_string($leaf['Expire date'] ?? null) && trim($leaf['Expire date']) !== '') {
-            try {
-                $expiresAt = new DateTimeImmutable(trim($leaf['Expire date']), new DateTimeZone('UTC'));
-            } catch (Throwable) {
-                $expiresAt = null;
-            }
-        } elseif (is_string($leaf['Cert'] ?? null) && function_exists('openssl_x509_parse')) {
-            $parsed = @openssl_x509_parse($leaf['Cert']);
-            if (is_array($parsed) && isset($parsed['validTo_time_t']) && is_numeric($parsed['validTo_time_t'])) {
-                $expiresAt = DateTimeImmutable::createFromFormat(
-                    'U',
-                    (string) ((int) $parsed['validTo_time_t']),
-                    new DateTimeZone('UTC')
-                ) ?: null;
-            }
-        }
-
-        return [$expiresAt, $issuer];
     }
 
     private function classifyTransportFailure(

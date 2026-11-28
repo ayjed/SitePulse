@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\BlockedDestinationException;
+use App\Support\SafeHttp\BatchCheckTarget;
 use App\Support\SafeHttp\BoundedBodyBuffer;
 use App\Support\SafeHttp\CanonicalUrlValidator;
 use App\Support\SafeHttp\Contracts\DnsResolverInterface;
@@ -442,7 +443,7 @@ test('SEC-16 strictly caps streamed response bodies at 500 KB and aborts oversiz
     expect(strlen((string) $check->response?->body))->toBe(512000);
 });
 
-test('extracts TLS leaf certificate expiry metadata and flags certificates expiring within 14 days', function () {
+test('extracts numeric TLS leaf expiry and issuer', function () {
     $dns = new RecordingDnsResolver(fn (): array => ['93.184.216.34']);
     $expiringSoonTimestamp = time() + (7 * 86400);
 
@@ -468,7 +469,6 @@ test('extracts TLS leaf certificate expiry metadata and flags certificates expir
     expect($result->tlsIssuer)->toBe('CN=Test Issuing CA');
     expect($result->tlsExpiresAt)->not->toBeNull();
     expect($result->tlsExpiresAt?->getTimestamp())->toBe($expiringSoonTimestamp);
-    expect($result->tlsExpiringSoon)->toBeTrue();
 });
 
 test('records DNS_FAILURE and HTTP_ERROR accurately in check() summaries', function () {
@@ -532,7 +532,7 @@ test('aborts redirect hops with DEADLINE_EXCEEDED when cumulative wall-clock bud
     expect($transport->requests)->toHaveCount(1);
 });
 
-test('parses libcurl Expire date strings and distinguishes healthy vs expiring certificates', function () {
+test('parses libcurl Expire date strings without a transport-level warning threshold', function () {
     $dns = new RecordingDnsResolver(fn (): array => ['93.184.216.34']);
     $healthyExpiry = (new DateTimeImmutable('+60 days', new DateTimeZone('UTC')))->format('M d H:i:s Y \G\M\T');
 
@@ -557,7 +557,6 @@ test('parses libcurl Expire date strings and distinguishes healthy vs expiring c
     expect($result->succeeded)->toBeTrue();
     expect($result->tlsIssuer)->toBe('CN=Public Root CA');
     expect($result->tlsExpiresAt)->not->toBeNull();
-    expect($result->tlsExpiringSoon)->toBeFalse();
 });
 
 test('Finding 1 regression: disallows custom request headers, validates User-Agent, and never leaks auth or cookies across redirects', function () {
@@ -736,3 +735,63 @@ test('redacts credentials and strips control characters from reported check URLs
     expect($result->finalUrl)->not->toContain("\n");
     expect((string) $result->errorMessage)->not->toContain('SuperSecretPassword');
 });
+
+test('attributes only the first configured HTTPS leaf through completed and failed redirect chains', function (
+    string $origin,
+    array $destinations,
+    bool $originHasMetadata,
+    int $terminalStatus,
+    ?SafeHttpFailureReason $failure,
+    string $path,
+) {
+    $originExpiry = 1796209200;
+    $destinationExpiry = 1805000000;
+    $dns = new RecordingDnsResolver(fn (): array => ['93.184.216.34']);
+    $transport = new RecordingHttpTransport(function (TransportRequest $request, int $attempt) use (
+        $destinations, $originHasMetadata, $terminalStatus, $failure, $originExpiry, $destinationExpiry,
+    ): TransportResponse {
+        $location = $destinations[$attempt] ?? null;
+        $certInfo = $request->url->scheme === 'https' && ($attempt !== 0 || $originHasMetadata)
+            ? [[
+                'validTo_time_t' => $attempt === 0 ? $originExpiry : $destinationExpiry,
+                'Issuer' => $attempt === 0 ? 'CN=Configured origin CA' : 'CN=Destination CA',
+            ]]
+            : [];
+
+        return new TransportResponse(
+            statusCode: $location !== null ? 302 : $terminalStatus,
+            headers: $location !== null ? ['location' => [$location]] : [],
+            body: '',
+            bodyTruncated: false,
+            bytesReceived: 0,
+            primaryIp: $request->pinnedIp,
+            certInfo: $certInfo,
+            curlErrno: $location === null && $failure === SafeHttpFailureReason::TLS_ERROR ? 60 : 0,
+        );
+    });
+    $client = new SafeHttpClient(dnsResolver: $dns, transport: $transport);
+
+    $result = $path === 'batch'
+        ? $client->checkBatch([new BatchCheckTarget(1, $origin)])[0]->result
+        : $client->check($origin);
+
+    $expectsMetadata = str_starts_with($origin, 'https://') && $originHasMetadata;
+    expect($result->succeeded)->toBe($failure === null)
+        ->and($result->failureReason)->toBe($failure)
+        ->and($result->tlsExpiresAt?->getTimestamp())->toBe($expectsMetadata ? $originExpiry : null)
+        ->and($result->tlsIssuer)->toBe($expectsMetadata ? 'CN=Configured origin CA' : null)
+        ->and(array_map(fn (TransportRequest $request): string => $request->url->url, $transport->requests))
+        ->toBe([$origin, ...$destinations]);
+})->with([
+    'direct HTTPS' => ['https://origin.example.test/start', [], true, 200, null],
+    'same origin' => ['https://origin.example.test/start', ['https://origin.example.test/end'], true, 200, null],
+    'different effective port' => ['https://origin.example.test:8443/start', ['https://origin.example.test/end'], true, 200, null],
+    'different hostname' => ['https://origin.example.test/start', ['https://destination.example.test/end'], true, 200, null],
+    'HTTPS then HTTP' => ['https://origin.example.test/start', ['http://destination.example.test/end'], true, 200, null],
+    'HTTP then HTTPS' => ['http://origin.example.test/start', ['https://destination.example.test/end'], true, 200, null],
+    'multiple hops' => ['https://origin.example.test/start', ['http://destination.example.test/mid', 'https://destination.example.test/end'], true, 200, null],
+    'missing certificate info at origin' => ['https://origin.example.test/start', ['https://destination.example.test/end'], false, 200, null],
+    'terminal TLS rejection' => ['https://origin.example.test/start', ['https://destination.example.test/end'], true, 0, SafeHttpFailureReason::TLS_ERROR],
+    'initial TLS rejection' => ['https://origin.example.test/start', [], false, 0, SafeHttpFailureReason::TLS_ERROR],
+    'unexpected HTTP status' => ['https://origin.example.test/start', ['https://destination.example.test/end'], true, 503, SafeHttpFailureReason::HTTP_ERROR],
+])->with(['single', 'batch']);

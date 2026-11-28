@@ -147,11 +147,11 @@ final class CheckBatchPersister
                 $tlsWarningToQueue = null;
 
                 if ($snapshot->scheme === 'https' && $result->tlsExpiresAt !== null) {
-                    $tlsExpiresAt = CarbonImmutable::instance($result->tlsExpiresAt)->utc();
+                    $tlsExpiresAt = CarbonImmutable::instance($result->tlsExpiresAt)->utc()->startOfSecond();
                     $updateAttributes['tls_expires_at'] = $tlsExpiresAt->format('Y-m-d H:i:s');
                     $updateAttributes['tls_last_checked_at'] = $formattedCheckedAt;
 
-                    $warningCutoff = $checkedAt->addDays($warningDays);
+                    $warningCutoff = $checkedAt->startOfSecond()->addDays($warningDays);
                     $currentCycle = max(1, (int) ($monitor->tls_warning_cycle ?? 1));
                     $existingWarnedExpiry = $monitor->tls_warning_expires_at !== null
                         ? CarbonImmutable::instance($monitor->tls_warning_expires_at)->utc()

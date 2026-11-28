@@ -21,6 +21,7 @@ final class LoopbackTestServer
         public readonly int $httpPort,
         public readonly int $httpsValidPort,
         public readonly int $httpsExpiringPort,
+        public readonly int $httpsExpiredPort,
         public readonly int $httpsMismatchPort,
         public readonly int $httpsUntrustedPort,
         private readonly string $metricsPath,
@@ -77,6 +78,7 @@ CNF);
             'certs' => [
                 'valid' => $workDir.'/leaf-valid.pem',
                 'expiring' => $workDir.'/leaf-expiring.pem',
+                'expired' => $workDir.'/leaf-expired.pem',
                 'mismatch' => $workDir.'/leaf-mismatch.pem',
                 'untrusted' => $workDir.'/leaf-untrusted.pem',
             ],
@@ -138,6 +140,7 @@ CNF);
             httpPort: (int) $ready['httpPort'],
             httpsValidPort: (int) $ready['httpsValidPort'],
             httpsExpiringPort: (int) $ready['httpsExpiringPort'],
+            httpsExpiredPort: (int) $ready['httpsExpiredPort'],
             httpsMismatchPort: (int) $ready['httpsMismatchPort'],
             httpsUntrustedPort: (int) $ready['httpsUntrustedPort'],
             metricsPath: $metricsPath,
@@ -158,6 +161,7 @@ CNF);
             $this->httpPort,
             $this->httpsValidPort,
             $this->httpsExpiringPort,
+            $this->httpsExpiredPort,
             $this->httpsMismatchPort,
             $this->httpsUntrustedPort,
         ];
@@ -239,6 +243,7 @@ CNF);
 
         self::writeLeafBundle($workDir.'/leaf-valid.pem', 'tls.example.test', $caCert, $caKey, $caPem, 90, $baseCfg + ['x509_extensions' => 'v3_leaf_valid']);
         self::writeLeafBundle($workDir.'/leaf-expiring.pem', 'expiring.example.test', $caCert, $caKey, $caPem, 5, $baseCfg + ['x509_extensions' => 'v3_leaf_valid']);
+        self::writeLeafBundle($workDir.'/leaf-expired.pem', 'expired.example.test', $caCert, $caKey, $caPem, 0, $baseCfg + ['x509_extensions' => 'v3_leaf_valid']);
         self::writeLeafBundle($workDir.'/leaf-mismatch.pem', 'wrong-host.example.test', $caCert, $caKey, $caPem, 90, $baseCfg + ['x509_extensions' => 'v3_leaf_mismatch']);
 
         // Rogue untrusted self-signed certificate.
@@ -353,6 +358,7 @@ $listeners = [
     'http' => ['sock' => createTcpListener(), 'tls' => false],
     'httpsValid' => ['sock' => createTlsListener($config['certs']['valid'], $caCertPath), 'tls' => true],
     'httpsExpiring' => ['sock' => createTlsListener($config['certs']['expiring'], $caCertPath), 'tls' => true],
+    'httpsExpired' => ['sock' => createTlsListener($config['certs']['expired'], $caCertPath), 'tls' => true],
     'httpsMismatch' => ['sock' => createTlsListener($config['certs']['mismatch'], $caCertPath), 'tls' => true],
     'httpsUntrusted' => ['sock' => createTlsListener($config['certs']['untrusted'], $caCertPath), 'tls' => true],
 ];
@@ -372,6 +378,7 @@ file_put_contents($readyPath, json_encode([
     'httpPort' => listenerPort($listeners['http']['sock']),
     'httpsValidPort' => listenerPort($listeners['httpsValid']['sock']),
     'httpsExpiringPort' => listenerPort($listeners['httpsExpiring']['sock']),
+    'httpsExpiredPort' => listenerPort($listeners['httpsExpired']['sock']),
     'httpsMismatchPort' => listenerPort($listeners['httpsMismatch']['sock']),
     'httpsUntrustedPort' => listenerPort($listeners['httpsUntrusted']['sock']),
 ], JSON_THROW_ON_ERROR));
@@ -417,6 +424,13 @@ function buildRouteResponse(string $method, string $target, int &$delayMs, bool 
 
     if ($path === '/redirect/2') {
         return "HTTP/1.1 302 Found\r\nLocation: /ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    }
+
+    if ($path === '/redirect-expiring' || $path === '/redirect-expired') {
+        global $listeners;
+        $endpoint = $path === '/redirect-expiring' ? 'httpsExpiring' : 'httpsExpired';
+        $port = listenerPort($listeners[$endpoint]['sock']);
+        return "HTTP/1.1 302 Found\r\nLocation: https://redirect.example.test:{$port}/ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     }
 
     if ($path === '/redirect-too-many/1') {

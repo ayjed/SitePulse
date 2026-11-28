@@ -14,4 +14,4 @@ use Tests\TestCase;
 */
 
 pest()->extend(TestCase::class)
-    ->in('Feature', 'Security');
+    ->in('Feature', 'Security', 'Integration');

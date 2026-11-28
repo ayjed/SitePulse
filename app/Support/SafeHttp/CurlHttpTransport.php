@@ -24,85 +24,113 @@ class CurlHttpTransport implements HttpTransportInterface
      */
     public function send(TransportRequest $request): TransportResponse
     {
+        $prepared = $this->prepareHandle($request);
+
+        if ($prepared->setupFailure !== null || ! $prepared->handle instanceof CurlHandle) {
+            $prepared->close();
+
+            return $prepared->toTransportResponse();
+        }
+
+        try {
+            curl_exec($prepared->handle);
+
+            return $prepared->toTransportResponse();
+        } finally {
+            $prepared->close();
+        }
+    }
+
+    /**
+     * Prepare a configured cURL handle ready for single or curl_multi execution without running I/O.
+     */
+    public function prepareHandle(TransportRequest $request): CurlPreparedHandle
+    {
         $startedAtNs = hrtime(true);
-        $bodyBuffer = new BoundedBodyBuffer($request->maxBodyBytes);
-        $headers = [];
-        $headerBytes = 0;
-        $headerCount = 0;
-        $headerLimitExceeded = false;
 
         // Enforce pinned IP and option construction invariants before touching curl_init().
         $options = $this->buildCurlOptions($request);
 
         $handle = curl_init();
         if (! $handle instanceof CurlHandle) {
-            return new TransportResponse(
-                statusCode: 0,
-                headers: [],
-                body: '',
-                bodyTruncated: false,
-                bytesReceived: 0,
-                primaryIp: null,
-                certInfo: [],
-                curlErrno: defined('CURLE_FAILED_INIT') ? CURLE_FAILED_INIT : 2,
-                curlError: 'Unable to initialize cURL transport handle.',
-                elapsedMs: 0,
+            return new CurlPreparedHandle(
+                handle: null,
+                maxBodyBytes: $request->maxBodyBytes,
+                startedAtNs: $startedAtNs,
+                setupFailure: new TransportResponse(
+                    statusCode: 0,
+                    headers: [],
+                    body: '',
+                    bodyTruncated: false,
+                    bytesReceived: 0,
+                    primaryIp: null,
+                    certInfo: [],
+                    curlErrno: defined('CURLE_FAILED_INIT') ? CURLE_FAILED_INIT : 2,
+                    curlError: 'Unable to initialize cURL transport handle.',
+                    elapsedMs: 0,
+                ),
             );
         }
 
-        try {
-            $options[CURLOPT_HEADERFUNCTION] = static function ($ch, string $headerLine) use (
-                &$headers,
-                &$headerBytes,
-                &$headerCount,
-                &$headerLimitExceeded,
-            ): int {
-                $length = strlen($headerLine);
+        $prepared = new CurlPreparedHandle(
+            handle: $handle,
+            maxBodyBytes: $request->maxBodyBytes,
+            startedAtNs: $startedAtNs,
+        );
 
-                if ($headerBytes + $length > self::MAX_HEADER_BYTES) {
-                    $headerLimitExceeded = true;
+        $options[CURLOPT_HEADERFUNCTION] = static function ($ch, string $headerLine) use ($prepared): int {
+            $length = strlen($headerLine);
+
+            if ($prepared->headerBytes + $length > self::MAX_HEADER_BYTES) {
+                $prepared->headerLimitExceeded = true;
+
+                return 0;
+            }
+
+            $prepared->headerBytes += $length;
+            $trimmed = trim($headerLine);
+
+            if ($trimmed === '') {
+                return $length;
+            }
+
+            if (str_starts_with(strtoupper($trimmed), 'HTTP/')) {
+                $prepared->headers = [];
+                $prepared->headerCount = 0;
+
+                return $length;
+            }
+
+            $colonPos = strpos($trimmed, ':');
+            if ($colonPos !== false) {
+                if ($prepared->headerCount >= self::MAX_HEADER_COUNT) {
+                    $prepared->headerLimitExceeded = true;
 
                     return 0;
                 }
 
-                $headerBytes += $length;
-                $trimmed = trim($headerLine);
+                $name = strtolower(trim(substr($trimmed, 0, $colonPos)));
+                $value = trim(substr($trimmed, $colonPos + 1));
 
-                if ($trimmed === '') {
-                    return $length;
+                if ($name !== '') {
+                    $prepared->headers[$name][] = $value;
+                    $prepared->headerCount++;
                 }
+            }
 
-                if (str_starts_with(strtoupper($trimmed), 'HTTP/')) {
-                    $headers = [];
-                    $headerCount = 0;
+            return $length;
+        };
 
-                    return $length;
-                }
+        $options[CURLOPT_WRITEFUNCTION] = static fn ($ch, string $chunk): int => $prepared->bodyBuffer->append($chunk);
 
-                $colonPos = strpos($trimmed, ':');
-                if ($colonPos !== false) {
-                    if ($headerCount >= self::MAX_HEADER_COUNT) {
-                        $headerLimitExceeded = true;
+        if (! curl_setopt_array($handle, $options)) {
+            $prepared->close();
 
-                        return 0;
-                    }
-
-                    $name = strtolower(trim(substr($trimmed, 0, $colonPos)));
-                    $value = trim(substr($trimmed, $colonPos + 1));
-
-                    if ($name !== '') {
-                        $headers[$name][] = $value;
-                        $headerCount++;
-                    }
-                }
-
-                return $length;
-            };
-
-            $options[CURLOPT_WRITEFUNCTION] = static fn ($ch, string $chunk): int => $bodyBuffer->append($chunk);
-
-            if (! curl_setopt_array($handle, $options)) {
-                return new TransportResponse(
+            return new CurlPreparedHandle(
+                handle: null,
+                maxBodyBytes: $request->maxBodyBytes,
+                startedAtNs: $startedAtNs,
+                setupFailure: new TransportResponse(
                     statusCode: 0,
                     headers: [],
                     body: '',
@@ -113,38 +141,11 @@ class CurlHttpTransport implements HttpTransportInterface
                     curlErrno: defined('CURLE_BAD_FUNCTION_ARGUMENT') ? CURLE_BAD_FUNCTION_ARGUMENT : 43,
                     curlError: 'Failed to apply mandatory hardened cURL transport options.',
                     elapsedMs: max(0, (int) round((hrtime(true) - $startedAtNs) / 1_000_000)),
-                );
-            }
-
-            curl_exec($handle);
-
-            $errno = curl_errno($handle);
-            $error = curl_error($handle);
-            $statusCode = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-            $rawPrimaryIp = curl_getinfo($handle, CURLINFO_PRIMARY_IP);
-            $rawCertInfo = curl_getinfo($handle, CURLINFO_CERTINFO);
-
-            $primaryIp = is_string($rawPrimaryIp) && $rawPrimaryIp !== '' ? $rawPrimaryIp : null;
-            $certInfo = is_array($rawCertInfo) ? array_values(array_filter($rawCertInfo, 'is_array')) : [];
-
-            $elapsedMs = max(0, (int) round((hrtime(true) - $startedAtNs) / 1_000_000));
-
-            return new TransportResponse(
-                statusCode: $statusCode,
-                headers: $headers,
-                body: $bodyBuffer->contents(),
-                bodyTruncated: $bodyBuffer->isTruncated(),
-                bytesReceived: $bodyBuffer->storedBytes(),
-                primaryIp: $primaryIp,
-                certInfo: $certInfo,
-                curlErrno: $errno,
-                curlError: $error,
-                elapsedMs: $elapsedMs,
-                headerLimitExceeded: $headerLimitExceeded,
+                ),
             );
-        } finally {
-            curl_close($handle);
         }
+
+        return $prepared;
     }
 
     /**
@@ -183,6 +184,11 @@ class CurlHttpTransport implements HttpTransportInterface
             CURLOPT_LOW_SPEED_TIME => max(1, $request->lowSpeedTimeSeconds),
             CURLOPT_USERAGENT => $request->userAgent,
         ];
+
+        $caInfoPath = $this->caInfoPath();
+        if ($caInfoPath !== null && $caInfoPath !== '') {
+            $options[CURLOPT_CAINFO] = $caInfoPath;
+        }
 
         if (defined('CURLOPT_UNRESTRICTED_AUTH')) {
             $options[CURLOPT_UNRESTRICTED_AUTH] = false;
@@ -235,5 +241,13 @@ class CurlHttpTransport implements HttpTransportInterface
         }
 
         return $options;
+    }
+
+    /**
+     * Production transport relies strictly on the system CA bundle; test subclasses may override cleanly.
+     */
+    protected function caInfoPath(): ?string
+    {
+        return null;
     }
 }

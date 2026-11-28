@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'name',
@@ -48,6 +49,42 @@ class Monitor extends Model
     public const DEFAULT_EXPECTED_STATUS_MAX = 299;
 
     /**
+     * Initialize and monotonically increment persistent monitor revision on configuration or state changes.
+     */
+    protected static function booted(): void
+    {
+        static::creating(static function (self $monitor): void {
+            if ($monitor->revision === null || (int) $monitor->revision < 1) {
+                $monitor->revision = 1;
+            }
+        });
+
+        static::updating(static function (self $monitor): void {
+            if ($monitor->isDirty([
+                'name',
+                'url',
+                'check_interval_minutes',
+                'timeout_seconds',
+                'expected_status_code_min',
+                'expected_status_code_max',
+                'is_active',
+                'status',
+                'consecutive_failures',
+                'consecutive_successes',
+                'last_checked_at',
+                'next_check_at',
+                'last_status_code',
+                'last_latency_ms',
+                'tls_expires_at',
+                'tls_last_checked_at',
+            ])) {
+                $current = (int) ($monitor->getOriginal('revision') ?? $monitor->revision ?? 1);
+                $monitor->revision = max(1, $current) + 1;
+            }
+        });
+    }
+
+    /**
      * Get the single site owner associated with this monitor.
      *
      * @return BelongsTo<User, $this>
@@ -55,6 +92,16 @@ class Monitor extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get historical check results recorded for this monitor.
+     *
+     * @return HasMany<CheckResult, $this>
+     */
+    public function checkResults(): HasMany
+    {
+        return $this->hasMany(CheckResult::class);
     }
 
     /**
@@ -124,12 +171,12 @@ class Monitor extends Model
     }
 
     /**
-     * Resume this monitor cleanly without executing immediate outbound network requests.
+     * Resume this monitor cleanly into unchecked `unknown` state without immediate network probes.
      */
     public function resume(): bool
     {
         $this->is_active = true;
-        $this->status = MonitorStatus::OPERATIONAL;
+        $this->status = MonitorStatus::UNKNOWN;
         $this->consecutive_failures = 0;
         $this->consecutive_successes = 0;
         $this->next_check_at = null;
@@ -151,7 +198,7 @@ class Monitor extends Model
         $this->tls_expires_at = null;
         $this->tls_last_checked_at = null;
         $this->is_active = $active;
-        $this->status = $active ? MonitorStatus::OPERATIONAL : MonitorStatus::PAUSED;
+        $this->status = $active ? MonitorStatus::UNKNOWN : MonitorStatus::PAUSED;
     }
 
     /**
@@ -175,6 +222,7 @@ class Monitor extends Model
             'last_latency_ms' => 'integer',
             'tls_expires_at' => 'datetime',
             'tls_last_checked_at' => 'datetime',
+            'revision' => 'integer',
         ];
     }
 }

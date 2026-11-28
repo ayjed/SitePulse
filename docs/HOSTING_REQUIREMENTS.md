@@ -67,12 +67,13 @@ Shared hosting compatibility is an **engineering target** that requires empirica
   - Diagnostic and status checks.
 
 ### 3.4 Cron & Task Scheduling Requirements
-- **Frequency:** System scheduler must be triggered **every 1 minute**:
+- **Deployment Safety Opt-In (`SITEPULSE_SCHEDULED_CHECKS_ENABLED`):** Scheduled execution of `sitepulse:check-monitors` via Laravel's scheduler defaults to **disabled** (`config/sitepulse.php` `scheduled_checks_enabled` reads `SITEPULSE_SCHEDULED_CHECKS_ENABLED=false`). Existing `artisan schedule:run` cron jobs will skip unattended outbound probes while `schedule:list` still shows the task and manual `php artisan sitepulse:check-monitors` CLI runs remain available. Unattended scheduled checks only run once `SITEPULSE_SCHEDULED_CHECKS_ENABLED=true` is explicitly configured (and rebuilt via `php artisan config:cache` if config caching is active).
+- **Frequency:** Once authorized and enabled, system scheduler should trigger **every 1 minute**:
   ```bash
   * * * * * php /path/to/sitepulse/artisan schedule:run >> /dev/null 2>&1
   ```
-- **Execution Budget:** The internal check engine enforces a monotonic deadline of 45s (50s hard ceiling) to ensure execution clears cleanly before the next cron tick.
-- **Locking:** `withoutOverlapping(10)` enforces a 10-minute cache lock TTL to prevent deadlocks after abrupt worker termination.
+- **Execution Budget:** The internal check engine enforces a whole-run monotonic deadline target of 45s (50s hard handle-cancellation ceiling; subject to non-preemptible synchronous DB and OS stub-resolver DNS boundaries) to clear cleanly before the next cron tick.
+- **Locking:** `withoutOverlapping(10)` enforces a 10-minute cache lock TTL alongside `MonitorCheckRunner`'s execution lock to prevent deadlocks after abrupt worker termination.
 
 ### 3.5 Database Requirements
 - **SQLite (Default):** SQLite 3.35.0+ with WAL mode (`PRAGMA journal_mode = WAL;`). Filesystem write permissions required in `database/` for `-wal` and `-shm` temporary files.

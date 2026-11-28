@@ -71,7 +71,7 @@
                                         </div>
                                     </td>
                                     <td class="px-4 py-4">
-                                        <span class="inline-flex items-center rounded-full border border-stone-300 bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-900 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100">
+                                        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold {{ $monitor->status->badgeClasses() }}">
                                             {{ $monitor->status->label() }}
                                         </span>
                                     </td>

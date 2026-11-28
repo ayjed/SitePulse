@@ -77,8 +77,11 @@
 
                     <div>
                         <dt class="text-xs font-semibold uppercase tracking-wide text-stone-600 dark:text-stone-400">Monitoring Status</dt>
-                        <dd class="mt-1 text-sm font-semibold text-stone-950 dark:text-stone-50">
-                            {{ $monitor->status->label() }} ({{ $monitor->is_active ? 'Active' : 'Paused' }})
+                        <dd class="mt-1 flex flex-wrap items-center gap-2 text-sm font-semibold text-stone-950 dark:text-stone-50">
+                            <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold {{ $monitor->status->badgeClasses() }}">
+                                {{ $monitor->status->label() }}
+                            </span>
+                            <span class="text-xs font-normal text-stone-600 dark:text-stone-400">({{ $monitor->is_active ? 'Active' : 'Paused' }})</span>
                         </dd>
                     </div>
 

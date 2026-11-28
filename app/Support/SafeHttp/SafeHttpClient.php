@@ -3,8 +3,10 @@
 namespace App\Support\SafeHttp;
 
 use App\Exceptions\BlockedDestinationException;
+use App\Support\SafeHttp\Contracts\DeadlineAwareDnsResolverInterface;
 use App\Support\SafeHttp\Contracts\DnsResolverInterface;
 use App\Support\SafeHttp\Contracts\HttpTransportInterface;
+use App\Support\SafeHttp\Contracts\MultiTransportDriverInterface;
 use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -62,6 +64,8 @@ class SafeHttpClient
 
     private readonly HttpTransportInterface $transport;
 
+    private readonly MultiTransportDriverInterface $multiTransport;
+
     /** @var Closure(): int */
     private readonly Closure $monotonicClockNs;
 
@@ -75,14 +79,20 @@ class SafeHttpClient
         ?HttpTransportInterface $transport = null,
         private readonly string $userAgent = self::DEFAULT_USER_AGENT,
         ?Closure $monotonicClockNs = null,
+        ?MultiTransportDriverInterface $multiTransport = null,
     ) {
         if ($userAgent === '' || preg_match('/[\x00-\x1F\x7F]/', $userAgent) === 1) {
             throw new InvalidArgumentException('SafeHttpClient User-Agent cannot be empty or contain control characters.');
         }
 
+        $this->monotonicClockNs = $monotonicClockNs ?? static fn (): int => hrtime(true);
         $this->dnsResolver = $dnsResolver ?? new NativeDnsResolver;
         $this->transport = $transport ?? new CurlHttpTransport($this->ipPolicy);
-        $this->monotonicClockNs = $monotonicClockNs ?? static fn (): int => hrtime(true);
+        $this->multiTransport = $multiTransport ?? (
+            $this->transport instanceof CurlHttpTransport
+                ? new CurlMultiTransportDriver($this->transport, $this->monotonicClockNs)
+                : new SequentialMultiTransportDriver($this->transport, $this->monotonicClockNs)
+        );
     }
 
     /**
@@ -118,96 +128,26 @@ class SafeHttpClient
         $currentMethod = $normalizedMethod;
 
         while (true) {
-            $validated = $this->urlValidator->validate($currentUrl);
-            $visitKey = $validated->canonicalKey();
+            $hop = $this->prepareHop($currentUrl, $currentMethod, $visitedKeys, $deadlineNs);
+            $transportResponse = $this->transport->send($hop['request']);
 
-            if (isset($visitedKeys[$visitKey])) {
-                throw new SafeHttpRequestException(
-                    SafeHttpFailureReason::MAX_REDIRECTS_EXCEEDED,
-                    'Redirect loop detected during hop-by-hop validation.'
-                );
-            }
-            $visitedKeys[$visitKey] = true;
-
-            $chosenIp = $this->resolveAndSelectPinnedIp($validated);
-
-            $remainingBudgetMs = $this->remainingBudgetMs($deadlineNs);
-            if ($remainingBudgetMs <= 0) {
-                throw new SafeHttpRequestException(
-                    SafeHttpFailureReason::DEADLINE_EXCEEDED,
-                    'Total monitor check deadline exceeded before connecting.'
-                );
-            }
-
-            $transportResponse = $this->transport->send(new TransportRequest(
-                url: $validated,
-                pinnedIp: $chosenIp,
-                method: $currentMethod,
-                connectTimeoutMs: min(self::CONNECT_TIMEOUT_SECONDS * 1000, $remainingBudgetMs),
-                timeoutMs: $remainingBudgetMs,
-                lowSpeedLimitBytesPerSec: self::LOW_SPEED_LIMIT_BYTES_PER_SEC,
-                lowSpeedTimeSeconds: min(
-                    self::LOW_SPEED_TIME_SECONDS,
-                    max(1, (int) ceil($remainingBudgetMs / 1000)),
-                ),
-                maxBodyBytes: self::MAX_BODY_BYTES,
-                userAgent: $this->userAgent,
-            ));
-
-            if ($transportResponse->primaryIp !== null && $transportResponse->primaryIp !== '') {
-                $this->assertConnectedPeerValid($transportResponse->primaryIp, $chosenIp);
-            }
-
-            $abortedCleanlyForSizeCap = $transportResponse->curlErrno === self::CURLE_WRITE_ERROR_CODE
-                && $transportResponse->bodyTruncated
-                && ! $transportResponse->headerLimitExceeded
-                && $transportResponse->statusCode > 0;
-
-            if ($transportResponse->curlErrno !== 0 && ! $abortedCleanlyForSizeCap) {
-                throw $this->classifyTransportFailure($transportResponse, $redirectsFollowed, $deadlineNs);
-            }
-
-            if ($transportResponse->primaryIp === null || $transportResponse->primaryIp === '') {
-                throw new BlockedDestinationException('Connected socket peer IP could not be verified.');
-            }
-
-            $this->assertConnectedPeerValid($transportResponse->primaryIp, $chosenIp);
-
-            $location = $this->extractFirstHeaderValue($transportResponse->headers, 'location');
-            if ($this->isRedirectStatus($transportResponse->statusCode) && $location !== null) {
-                if ($redirectsFollowed >= self::MAX_REDIRECTS) {
-                    throw new SafeHttpRequestException(
-                        SafeHttpFailureReason::MAX_REDIRECTS_EXCEEDED,
-                        'Maximum redirect hop limit (3) exceeded.'
-                    );
-                }
-
-                $redirectsFollowed++;
-                $currentUrl = $this->urlValidator->resolveRedirectTarget($validated, $location);
-
-                if ($transportResponse->statusCode === 303 && $currentMethod !== 'HEAD') {
-                    $currentMethod = 'GET';
-                }
-
-                continue;
-            }
-
-            [$tlsExpiresAt, $tlsIssuer] = $this->extractTlsMetadata($validated, $transportResponse->certInfo);
-            $latencyMs = $this->elapsedMs($startedAtNs);
-
-            return new SafeHttpResponse(
-                finalUrl: $validated->url,
-                resolvedIp: $transportResponse->primaryIp,
-                statusCode: $transportResponse->statusCode,
-                headers: $transportResponse->headers,
-                body: $transportResponse->body,
-                bodyTruncated: $transportResponse->bodyTruncated,
-                bytesReceived: $transportResponse->bytesReceived,
-                latencyMs: $latencyMs,
+            $evaluation = $this->evaluateCompletedHop(
+                validated: $hop['validated'],
+                pinnedIp: $hop['pinnedIp'],
+                currentMethod: $currentMethod,
                 redirectsFollowed: $redirectsFollowed,
-                tlsExpiresAt: $tlsExpiresAt,
-                tlsIssuer: $tlsIssuer,
+                deadlineNs: $deadlineNs,
+                startedAtNs: $startedAtNs,
+                transportResponse: $transportResponse,
             );
+
+            if (isset($evaluation['response'])) {
+                return $evaluation['response'];
+            }
+
+            $redirectsFollowed = $evaluation['redirectsFollowed'];
+            $currentUrl = $evaluation['redirectUrl'];
+            $currentMethod = $evaluation['nextMethod'];
         }
     }
 
@@ -225,41 +165,438 @@ class SafeHttpClient
 
         try {
             $response = $this->request($url, $timeoutSeconds, $method);
-            $tlsExpiringSoon = $response->isTlsExpiringSoon(self::TLS_EXPIRY_WARNING_DAYS);
 
-            if ($response->statusCode < $expectedStatusMin || $response->statusCode > $expectedStatusMax) {
-                return SafeHttpCheckResult::failure(
-                    reason: SafeHttpFailureReason::HTTP_ERROR,
-                    errorMessage: "Unexpected HTTP status code {$response->statusCode}.",
-                    finalUrl: $response->finalUrl,
-                    latencyMs: $response->latencyMs,
-                    statusCode: $response->statusCode,
-                    resolvedIp: $response->resolvedIp,
-                    redirectsFollowed: $response->redirectsFollowed,
-                    tlsExpiresAt: $response->tlsExpiresAt,
-                    tlsIssuer: $response->tlsIssuer,
-                    tlsExpiringSoon: $tlsExpiringSoon,
-                    bodyTruncated: $response->bodyTruncated,
-                    bytesReceived: $response->bytesReceived,
+            return $this->buildCheckResultFromResponse(
+                response: $response,
+                expectedStatusMin: $expectedStatusMin,
+                expectedStatusMax: $expectedStatusMax,
+                includeResponse: true,
+            );
+        } catch (BlockedDestinationException|SafeHttpRequestException $exception) {
+            return $this->buildFailureResultFromException($exception, $url, $startedAtNs);
+        }
+    }
+
+    /**
+     * Execute a bounded, concurrently pooled batch of safe probes with soft intake cutoff and hard cancellation.
+     *
+     * @param  iterable<int, BatchCheckTarget>  $targets
+     * @param  (callable(BatchCheckOutcome): void)|null  $onOutcome
+     * @return array<int, BatchCheckOutcome>
+     */
+    public function checkBatch(
+        iterable $targets,
+        int $maxConcurrency = 5,
+        int|float $softDeadlineSeconds = 45,
+        int|float $hardDeadlineSeconds = 50,
+        ?callable $onOutcome = null,
+        ?int $softDeadlineNs = null,
+        ?int $hardDeadlineNs = null,
+    ): array {
+        $concurrency = max(1, min(10, $maxConcurrency));
+
+        if ($softDeadlineSeconds <= 0 || $hardDeadlineSeconds < $softDeadlineSeconds) {
+            throw new InvalidArgumentException('Batch soft/hard deadlines must be positive with hardDeadlineSeconds >= softDeadlineSeconds.');
+        }
+
+        $queue = array_values(is_array($targets) ? $targets : iterator_to_array($targets, false));
+        foreach ($queue as $target) {
+            if (! $target instanceof BatchCheckTarget) {
+                throw new InvalidArgumentException('Every batch check target must be an instance of BatchCheckTarget.');
+            }
+
+            $this->assertValidTimeout($target->timeoutSeconds);
+            $this->normalizeMethod($target->method);
+        }
+
+        if ($queue === []) {
+            return [];
+        }
+
+        $batchStartedAtNs = $this->nowNs();
+        $resolvedSoftDeadlineNs = $softDeadlineNs ?? ($batchStartedAtNs + (int) round($softDeadlineSeconds * 1_000_000_000));
+        $resolvedHardDeadlineNs = $hardDeadlineNs ?? ($batchStartedAtNs + (int) round($hardDeadlineSeconds * 1_000_000_000));
+
+        if ($resolvedHardDeadlineNs < $resolvedSoftDeadlineNs) {
+            throw new InvalidArgumentException('Batch hardDeadlineNs must be greater than or equal to softDeadlineNs.');
+        }
+
+        $total = count($queue);
+        $nextIndex = 0;
+
+        /** @var array<int, array{target: BatchCheckTarget, method: string, startedAtNs: int, deadlineNs: int, visitedKeys: array<string, bool>, redirectsFollowed: int, validated: ValidatedUrl, pinnedIp: string}> $activeStates */
+        $activeStates = [];
+        /** @var array<int, BatchCheckOutcome> $outcomes */
+        $outcomes = [];
+
+        $emitOutcome = static function (int $index, BatchCheckOutcome $outcome) use (&$outcomes, $onOutcome): void {
+            $outcomes[$index] = $outcome;
+
+            if ($onOutcome !== null) {
+                $onOutcome($outcome);
+            }
+        };
+
+        $nextJob = function () use (
+            &$nextIndex,
+            &$activeStates,
+            $total,
+            $queue,
+            $resolvedSoftDeadlineNs,
+            $resolvedHardDeadlineNs,
+            $emitOutcome,
+        ): ?array {
+            while ($nextIndex < $total) {
+                if ($this->nowNs() >= $resolvedSoftDeadlineNs) {
+                    return null;
+                }
+
+                $index = $nextIndex;
+                $nextIndex++;
+
+                $target = $queue[$index];
+                $startedAtNs = $this->nowNs();
+                $deadlineNs = $startedAtNs + ($target->timeoutSeconds * 1_000_000_000);
+                $dnsDeadlineNs = min($deadlineNs, $resolvedHardDeadlineNs);
+                $method = $this->normalizeMethod($target->method);
+                $visitedKeys = [];
+
+                try {
+                    $hop = $this->prepareHop($target->url, $method, $visitedKeys, $deadlineNs, $dnsDeadlineNs);
+                } catch (BlockedDestinationException|SafeHttpRequestException $exception) {
+                    if ($this->nowNs() >= $resolvedHardDeadlineNs) {
+                        $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
+
+                        return null;
+                    }
+
+                    $result = $this->buildFailureResultFromException($exception, $target->url, $startedAtNs);
+                    $emitOutcome($index, new BatchCheckOutcome($target, $result, false));
+
+                    continue;
+                }
+
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
+                    $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
+
+                    return null;
+                }
+
+                $activeStates[$index] = [
+                    'target' => $target,
+                    'method' => $method,
+                    'startedAtNs' => $startedAtNs,
+                    'deadlineNs' => $deadlineNs,
+                    'visitedKeys' => $visitedKeys,
+                    'redirectsFollowed' => 0,
+                    'validated' => $hop['validated'],
+                    'pinnedIp' => $hop['pinnedIp'],
+                ];
+
+                return [
+                    'id' => $index,
+                    'request' => $hop['request'],
+                ];
+            }
+
+            return null;
+        };
+
+        $onComplete = function (int|string $id, TransportResponse $transportResponse) use (
+            &$activeStates,
+            $resolvedHardDeadlineNs,
+            $emitOutcome,
+        ): ?TransportRequest {
+            $index = (int) $id;
+            $state = $activeStates[$index] ?? null;
+
+            if ($state === null) {
+                return null;
+            }
+
+            $target = $state['target'];
+
+            try {
+                $evaluation = $this->evaluateCompletedHop(
+                    validated: $state['validated'],
+                    pinnedIp: $state['pinnedIp'],
+                    currentMethod: $state['method'],
+                    redirectsFollowed: $state['redirectsFollowed'],
+                    deadlineNs: $state['deadlineNs'],
+                    startedAtNs: $state['startedAtNs'],
+                    transportResponse: $transportResponse,
+                );
+
+                if (isset($evaluation['response'])) {
+                    unset($activeStates[$index]);
+
+                    $result = $this->buildCheckResultFromResponse(
+                        response: $evaluation['response'],
+                        expectedStatusMin: $target->expectedStatusMin,
+                        expectedStatusMax: $target->expectedStatusMax,
+                        includeResponse: false,
+                    );
+
+                    $emitOutcome($index, new BatchCheckOutcome($target, $result, false));
+
+                    return null;
+                }
+
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
+                    unset($activeStates[$index]);
+                    $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
+
+                    return null;
+                }
+
+                $state['redirectsFollowed'] = $evaluation['redirectsFollowed'];
+                $state['method'] = $evaluation['nextMethod'];
+
+                $hop = $this->prepareHop(
+                    url: $evaluation['redirectUrl'],
+                    method: $state['method'],
+                    visitedKeys: $state['visitedKeys'],
+                    deadlineNs: $state['deadlineNs'],
+                    dnsDeadlineNs: min($state['deadlineNs'], $resolvedHardDeadlineNs),
+                );
+
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
+                    unset($activeStates[$index]);
+                    $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
+
+                    return null;
+                }
+
+                $state['validated'] = $hop['validated'];
+                $state['pinnedIp'] = $hop['pinnedIp'];
+                $activeStates[$index] = $state;
+
+                return $hop['request'];
+            } catch (BlockedDestinationException|SafeHttpRequestException $exception) {
+                unset($activeStates[$index]);
+
+                if ($this->nowNs() >= $resolvedHardDeadlineNs) {
+                    $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
+
+                    return null;
+                }
+
+                $result = $this->buildFailureResultFromException($exception, $target->url, $state['startedAtNs']);
+                $emitOutcome($index, new BatchCheckOutcome($target, $result, false));
+
+                return null;
+            }
+        };
+
+        $onCancelled = static function (array $cancelledIds) use (&$activeStates, $emitOutcome): void {
+            foreach ($cancelledIds as $id) {
+                $index = (int) $id;
+                if (! isset($activeStates[$index])) {
+                    continue;
+                }
+
+                $target = $activeStates[$index]['target'];
+                unset($activeStates[$index]);
+                $emitOutcome($index, new BatchCheckOutcome($target, null, true, 'hard_deadline'));
+            }
+        };
+
+        $this->multiTransport->run(
+            maxConcurrency: $concurrency,
+            hardDeadlineNs: $resolvedHardDeadlineNs,
+            nextJob: $nextJob,
+            onComplete: $onComplete,
+            onCancelled: $onCancelled,
+        );
+
+        foreach ($activeStates as $index => $state) {
+            unset($activeStates[$index]);
+            $emitOutcome($index, new BatchCheckOutcome($state['target'], null, true, 'hard_deadline'));
+        }
+
+        for ($index = $nextIndex; $index < $total; $index++) {
+            $emitOutcome($index, new BatchCheckOutcome($queue[$index], null, true, 'soft_deadline'));
+        }
+
+        ksort($outcomes);
+
+        return array_values($outcomes);
+    }
+
+    /**
+     * Validate URL syntax/SSRF, enforce redirect loop tracking, pin DNS, and construct a hop TransportRequest.
+     *
+     * @param  array<string, bool>  $visitedKeys
+     * @return array{validated: ValidatedUrl, pinnedIp: string, request: TransportRequest}
+     */
+    private function prepareHop(
+        string $url,
+        string $method,
+        array &$visitedKeys,
+        int $deadlineNs,
+        ?int $dnsDeadlineNs = null,
+    ): array {
+        $validated = $this->urlValidator->validate($url);
+        $visitKey = $validated->canonicalKey();
+
+        if (isset($visitedKeys[$visitKey])) {
+            throw new SafeHttpRequestException(
+                SafeHttpFailureReason::MAX_REDIRECTS_EXCEEDED,
+                'Redirect loop detected during hop-by-hop validation.'
+            );
+        }
+        $visitedKeys[$visitKey] = true;
+
+        $chosenIp = $this->resolveAndSelectPinnedIp($validated, $dnsDeadlineNs ?? $deadlineNs);
+
+        $remainingBudgetMs = $this->remainingBudgetMs($deadlineNs);
+        if ($remainingBudgetMs <= 0) {
+            throw new SafeHttpRequestException(
+                SafeHttpFailureReason::DEADLINE_EXCEEDED,
+                'Total monitor check deadline exceeded before connecting.'
+            );
+        }
+
+        $request = new TransportRequest(
+            url: $validated,
+            pinnedIp: $chosenIp,
+            method: $method,
+            connectTimeoutMs: min(self::CONNECT_TIMEOUT_SECONDS * 1000, $remainingBudgetMs),
+            timeoutMs: $remainingBudgetMs,
+            lowSpeedLimitBytesPerSec: self::LOW_SPEED_LIMIT_BYTES_PER_SEC,
+            lowSpeedTimeSeconds: min(
+                self::LOW_SPEED_TIME_SECONDS,
+                max(1, (int) ceil($remainingBudgetMs / 1000)),
+            ),
+            maxBodyBytes: self::MAX_BODY_BYTES,
+            userAgent: $this->userAgent,
+        );
+
+        return [
+            'validated' => $validated,
+            'pinnedIp' => $chosenIp,
+            'request' => $request,
+        ];
+    }
+
+    /**
+     * Validate post-connect peer IP, handle safe body truncation, follow manual redirects, or extract TLS/response.
+     *
+     * @return array{response?: SafeHttpResponse, redirectUrl?: string, nextMethod?: string, redirectsFollowed?: int}
+     */
+    private function evaluateCompletedHop(
+        ValidatedUrl $validated,
+        string $pinnedIp,
+        string $currentMethod,
+        int $redirectsFollowed,
+        int $deadlineNs,
+        int $startedAtNs,
+        TransportResponse $transportResponse,
+    ): array {
+        if ($transportResponse->primaryIp !== null && $transportResponse->primaryIp !== '') {
+            $this->assertConnectedPeerValid($transportResponse->primaryIp, $pinnedIp);
+        }
+
+        $abortedCleanlyForSizeCap = $transportResponse->curlErrno === self::CURLE_WRITE_ERROR_CODE
+            && $transportResponse->bodyTruncated
+            && ! $transportResponse->headerLimitExceeded
+            && $transportResponse->statusCode > 0;
+
+        if ($transportResponse->curlErrno !== 0 && ! $abortedCleanlyForSizeCap) {
+            throw $this->classifyTransportFailure($transportResponse, $redirectsFollowed, $deadlineNs);
+        }
+
+        if ($transportResponse->primaryIp === null || $transportResponse->primaryIp === '') {
+            throw new BlockedDestinationException('Connected socket peer IP could not be verified.');
+        }
+
+        $this->assertConnectedPeerValid($transportResponse->primaryIp, $pinnedIp);
+
+        $location = $this->extractFirstHeaderValue($transportResponse->headers, 'location');
+        if ($this->isRedirectStatus($transportResponse->statusCode) && $location !== null) {
+            if ($redirectsFollowed >= self::MAX_REDIRECTS) {
+                throw new SafeHttpRequestException(
+                    SafeHttpFailureReason::MAX_REDIRECTS_EXCEEDED,
+                    'Maximum redirect hop limit (3) exceeded.'
                 );
             }
 
-            return SafeHttpCheckResult::success($response, $tlsExpiringSoon);
-        } catch (BlockedDestinationException $exception) {
+            $nextRedirects = $redirectsFollowed + 1;
+            $nextUrl = $this->urlValidator->resolveRedirectTarget($validated, $location);
+            $nextMethod = ($transportResponse->statusCode === 303 && $currentMethod !== 'HEAD')
+                ? 'GET'
+                : $currentMethod;
+
+            return [
+                'redirectUrl' => $nextUrl,
+                'nextMethod' => $nextMethod,
+                'redirectsFollowed' => $nextRedirects,
+            ];
+        }
+
+        [$tlsExpiresAt, $tlsIssuer] = $this->extractTlsMetadata($validated, $transportResponse->certInfo);
+        $latencyMs = $this->elapsedMs($startedAtNs);
+
+        return [
+            'response' => new SafeHttpResponse(
+                finalUrl: $validated->url,
+                resolvedIp: $transportResponse->primaryIp,
+                statusCode: $transportResponse->statusCode,
+                headers: $transportResponse->headers,
+                body: $transportResponse->body,
+                bodyTruncated: $transportResponse->bodyTruncated,
+                bytesReceived: $transportResponse->bytesReceived,
+                latencyMs: $latencyMs,
+                redirectsFollowed: $redirectsFollowed,
+                tlsExpiresAt: $tlsExpiresAt,
+                tlsIssuer: $tlsIssuer,
+            ),
+        ];
+    }
+
+    private function buildCheckResultFromResponse(
+        SafeHttpResponse $response,
+        int $expectedStatusMin,
+        int $expectedStatusMax,
+        bool $includeResponse = true,
+    ): SafeHttpCheckResult {
+        $tlsExpiringSoon = $response->isTlsExpiringSoon(self::TLS_EXPIRY_WARNING_DAYS);
+
+        if ($response->statusCode < $expectedStatusMin || $response->statusCode > $expectedStatusMax) {
             return SafeHttpCheckResult::failure(
-                reason: SafeHttpFailureReason::SSRF_BLOCKED,
-                errorMessage: $this->sanitizeErrorMessage($exception),
-                finalUrl: $this->sanitizeUrlForReport($url),
-                latencyMs: $this->elapsedMs($startedAtNs),
-            );
-        } catch (SafeHttpRequestException $exception) {
-            return SafeHttpCheckResult::failure(
-                reason: $exception->reason,
-                errorMessage: $this->sanitizeErrorMessage($exception),
-                finalUrl: $this->sanitizeUrlForReport($url),
-                latencyMs: $this->elapsedMs($startedAtNs),
+                reason: SafeHttpFailureReason::HTTP_ERROR,
+                errorMessage: "Unexpected HTTP status code {$response->statusCode}.",
+                finalUrl: $response->finalUrl,
+                latencyMs: $response->latencyMs,
+                statusCode: $response->statusCode,
+                resolvedIp: $response->resolvedIp,
+                redirectsFollowed: $response->redirectsFollowed,
+                tlsExpiresAt: $response->tlsExpiresAt,
+                tlsIssuer: $response->tlsIssuer,
+                tlsExpiringSoon: $tlsExpiringSoon,
+                bodyTruncated: $response->bodyTruncated,
+                bytesReceived: $response->bytesReceived,
             );
         }
+
+        return SafeHttpCheckResult::success($response, $tlsExpiringSoon, $includeResponse);
+    }
+
+    private function buildFailureResultFromException(
+        BlockedDestinationException|SafeHttpRequestException $exception,
+        string $url,
+        int $startedAtNs,
+    ): SafeHttpCheckResult {
+        $reason = $exception instanceof BlockedDestinationException
+            ? SafeHttpFailureReason::SSRF_BLOCKED
+            : $exception->reason;
+
+        return SafeHttpCheckResult::failure(
+            reason: $reason,
+            errorMessage: $this->sanitizeErrorMessage($exception),
+            finalUrl: $this->sanitizeUrlForReport($url),
+            latencyMs: $this->elapsedMs($startedAtNs),
+        );
     }
 
     private function assertValidTimeout(int $timeoutSeconds): void
@@ -284,13 +621,29 @@ class SafeHttpClient
         return $upper;
     }
 
-    private function resolveAndSelectPinnedIp(ValidatedUrl $validated): string
+    private function resolveAndSelectPinnedIp(ValidatedUrl $validated, ?int $deadlineNs = null): string
     {
         if ($validated->isIpLiteral) {
             return $this->ipPolicy->assertAllowed($validated->host);
         }
 
-        $resolvedIps = $this->dnsResolver->resolve($validated->host);
+        if ($deadlineNs !== null && $this->nowNs() >= $deadlineNs) {
+            throw new SafeHttpRequestException(
+                SafeHttpFailureReason::DEADLINE_EXCEEDED,
+                'Remaining deadline exceeded prior to DNS resolution.'
+            );
+        }
+
+        $resolvedIps = $this->dnsResolver instanceof DeadlineAwareDnsResolverInterface
+            ? $this->dnsResolver->resolveWithDeadline($validated->host, $deadlineNs)
+            : $this->dnsResolver->resolve($validated->host);
+
+        if ($deadlineNs !== null && $this->nowNs() >= $deadlineNs) {
+            throw new SafeHttpRequestException(
+                SafeHttpFailureReason::DEADLINE_EXCEEDED,
+                'Remaining deadline elapsed during synchronous DNS resolution.'
+            );
+        }
 
         if ($resolvedIps === []) {
             throw new SafeHttpRequestException(

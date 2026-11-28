@@ -262,7 +262,7 @@ class CanonicalUrlValidator
         return $port;
     }
 
-    private function assertPortAllowed(int $port): void
+    protected function assertPortAllowed(int $port): void
     {
         if (in_array($port, self::BLOCKED_SENSITIVE_PORTS, true)) {
             throw new BlockedDestinationException("Destination port {$port} is blocked by security policy.");

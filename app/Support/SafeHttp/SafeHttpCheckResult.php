@@ -20,13 +20,12 @@ final readonly class SafeHttpCheckResult
         public int $redirectsFollowed,
         public ?DateTimeImmutable $tlsExpiresAt,
         public ?string $tlsIssuer,
-        public bool $tlsExpiringSoon,
         public bool $bodyTruncated,
         public int $bytesReceived,
         public ?SafeHttpResponse $response = null,
     ) {}
 
-    public static function success(SafeHttpResponse $response, bool $tlsExpiringSoon, bool $includeResponse = true): self
+    public static function success(SafeHttpResponse $response, bool $includeResponse = true): self
     {
         return new self(
             succeeded: true,
@@ -39,7 +38,6 @@ final readonly class SafeHttpCheckResult
             redirectsFollowed: $response->redirectsFollowed,
             tlsExpiresAt: $response->tlsExpiresAt,
             tlsIssuer: $response->tlsIssuer,
-            tlsExpiringSoon: $tlsExpiringSoon,
             bodyTruncated: $response->bodyTruncated,
             bytesReceived: $response->bytesReceived,
             response: $includeResponse ? $response : null,
@@ -56,7 +54,6 @@ final readonly class SafeHttpCheckResult
         int $redirectsFollowed = 0,
         ?DateTimeImmutable $tlsExpiresAt = null,
         ?string $tlsIssuer = null,
-        bool $tlsExpiringSoon = false,
         bool $bodyTruncated = false,
         int $bytesReceived = 0,
     ): self {
@@ -71,7 +68,6 @@ final readonly class SafeHttpCheckResult
             redirectsFollowed: $redirectsFollowed,
             tlsExpiresAt: $tlsExpiresAt,
             tlsIssuer: $tlsIssuer,
-            tlsExpiringSoon: $tlsExpiringSoon,
             bodyTruncated: $bodyTruncated,
             bytesReceived: $bytesReceived,
             response: null,

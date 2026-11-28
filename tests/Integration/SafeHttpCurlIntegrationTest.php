@@ -2,6 +2,7 @@
 
 use App\Support\SafeHttp\BatchCheckTarget;
 use App\Support\SafeHttp\SafeHttpFailureReason;
+use App\Support\SafeHttp\VerifiedTlsMetadata;
 use Tests\Support\LoopbackSafeHttpFactory;
 use Tests\Support\LoopbackTestServer;
 
@@ -97,29 +98,66 @@ test('verifies HTTPS TLS certificates via test CA, extracts expiry metadata, and
         $caClient = LoopbackSafeHttpFactory::clientForServer($server, useServerCa: true);
         $systemCaClient = LoopbackSafeHttpFactory::clientForServer($server, useServerCa: false);
 
+        // The fixture CA signs the expired leaf with zero days of validity.
+        sleep(1);
+        $caPem = file_get_contents($server->caCertPath);
+        $expiredBundle = file_get_contents(dirname($server->caCertPath).'/leaf-expired.pem');
+        $expired = openssl_x509_parse($expiredBundle);
+        expect(openssl_x509_verify($expiredBundle, openssl_pkey_get_public($caPem)))->toBe(1)
+            ->and($expired['validFrom_time_t'])->toBeLessThanOrEqual(time())
+            ->and($expired['validTo_time_t'])->toBeLessThan(time());
         $outcomes = $caClient->checkBatch([
             new BatchCheckTarget(1, "https://tls.example.test:{$server->httpsValidPort}/ok"),
             new BatchCheckTarget(2, "https://expiring.example.test:{$server->httpsExpiringPort}/ok"),
             new BatchCheckTarget(3, "https://badhost.example.test:{$server->httpsMismatchPort}/ok"),
             new BatchCheckTarget(4, "https://rogue.example.test:{$server->httpsUntrustedPort}/ok"),
+            new BatchCheckTarget(5, "https://expired.example.test:{$server->httpsExpiredPort}/ok"),
         ], maxConcurrency: 4);
 
         expect($outcomes[0]->result->succeeded)->toBeTrue()
             ->and($outcomes[0]->result->tlsExpiresAt)->not->toBeNull()
-            ->and($outcomes[0]->result->tlsExpiringSoon)->toBeFalse()
             ->and((string) $outcomes[0]->result->tlsIssuer)->toContain('SitePulse Test CA')
             ->and($outcomes[1]->result->succeeded)->toBeTrue()
             ->and($outcomes[1]->result->tlsExpiresAt)->not->toBeNull()
-            ->and($outcomes[1]->result->tlsExpiringSoon)->toBeTrue()
+            ->and($outcomes[0]->result->tlsExpiresAt->getTimestamp())->toBeGreaterThan($outcomes[1]->result->tlsExpiresAt->getTimestamp())
             ->and($outcomes[2]->result->succeeded)->toBeFalse()
             ->and($outcomes[2]->result->failureReason)->toBe(SafeHttpFailureReason::TLS_ERROR)
             ->and($outcomes[3]->result->succeeded)->toBeFalse()
-            ->and($outcomes[3]->result->failureReason)->toBe(SafeHttpFailureReason::TLS_ERROR);
+            ->and($outcomes[3]->result->failureReason)->toBe(SafeHttpFailureReason::TLS_ERROR)
+            ->and($outcomes[4]->result->succeeded)->toBeFalse()
+            ->and($outcomes[4]->result->failureReason)->toBe(SafeHttpFailureReason::TLS_ERROR)
+            ->and($outcomes[4]->result->tlsExpiresAt)->toBeNull()
+            ->and($outcomes[4]->result->tlsIssuer)->toBeNull();
 
-        // Verify stock CurlHttpTransport (no custom CA) strictly rejects self-signed/private CA certs too.
+        // The test CA chain is untrusted when the stock transport uses system roots.
         $prodReject = $systemCaClient->check("https://tls.example.test:{$server->httpsValidPort}/ok");
         expect($prodReject->succeeded)->toBeFalse()
             ->and($prodReject->failureReason)->toBe(SafeHttpFailureReason::TLS_ERROR);
+
+        $parsed = openssl_x509_parse($caPem);
+        $metadata = VerifiedTlsMetadata::fromCertificateInfo([[
+            'validTo_time_t' => 'not an epoch',
+            'Expire date' => 'not a date',
+            'Issuer' => '',
+            'Cert' => $caPem,
+        ]]);
+        expect($metadata->expiresAt?->getTimestamp())->toBe($parsed['validTo_time_t'])
+            ->and($metadata->issuer)->toContain('CN=SitePulse Test CA');
+
+        $redirects = $caClient->checkBatch([
+            new BatchCheckTarget(1, "https://tls.example.test:{$server->httpsValidPort}/redirect-expiring"),
+            new BatchCheckTarget(2, "https://tls.example.test:{$server->httpsValidPort}/redirect-expired"),
+            new BatchCheckTarget(3, "http://example.test:{$server->httpPort}/redirect-expiring"),
+        ], maxConcurrency: 3);
+        $originExpiry = $outcomes[0]->result->tlsExpiresAt->getTimestamp();
+        expect($redirects[0]->result->succeeded)->toBeTrue()
+            ->and($redirects[0]->result->finalUrl)->toBe("https://redirect.example.test:{$server->httpsExpiringPort}/ok")
+            ->and($redirects[0]->result->tlsExpiresAt?->getTimestamp())->toBe($originExpiry)
+            ->and($redirects[1]->result->failureReason)->toBe(SafeHttpFailureReason::TLS_ERROR)
+            ->and($redirects[1]->result->tlsExpiresAt?->getTimestamp())->toBe($originExpiry)
+            ->and($redirects[2]->result->succeeded)->toBeTrue()
+            ->and($redirects[2]->result->tlsExpiresAt)->toBeNull()
+            ->and($redirects[2]->result->tlsIssuer)->toBeNull();
     } finally {
         $server->stop();
     }

@@ -1,10 +1,10 @@
 # Phase 04 — Alerts, TLS, and Hardening
 
-**Status:** IN PROGRESS (P04-01 requirements and existing engine reconciliation active)
+**Status:** IN PROGRESS (P04-02 TLS contract and transport verification in review)
 
 ## Proposed execution sequence
 
-The maintainer authorized P04-01 after Phase 03 conditional functional approval took effect through PR #15 at `1034bd6e936aa2a25d49b8ec4f39a19a9c820439`. The [P04-01 reconciliation](../audits/P04_01_REQUIREMENTS_RECONCILIATION.md) maps evidence, gaps and proposed decisions. P04-02 through P04-04 require subsequent authorization.
+The maintainer authorized P04-01 after Phase 03 conditional functional approval took effect through PR #15 at `1034bd6e936aa2a25d49b8ec4f39a19a9c820439`. The [P04-01 reconciliation](../audits/P04_01_REQUIREMENTS_RECONCILIATION.md) maps evidence, gaps and proposed decisions. PR #16 closed P04-01 at `44f9d5132257a9269f216de1b9386defcf2de0db`. The maintainer authorized P04-02 under [ADR-0006](../decisions/ADR-0006-tls-origin-verification.md). [Verification and remaining limitations](../audits/P04_02_TLS_VERIFICATION.md) are in review. P04-03 and P04-04 require subsequent authorization.
 
 | Task | Depends on | Outcome |
 |---|---|---|

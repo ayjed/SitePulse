@@ -2,7 +2,7 @@
 
 > A lightweight, self-hosted website uptime and response-time monitoring application built on Laravel 13.
 
-**Status:** Phase 04 — IN PROGRESS, with P04-01 requirements reconciliation active. Phase 03 functional approval is conditional. Full WCAG 2.1 AA verification remains an open public-release gate. See the [phase tracker](SITEPULSE_PHASE_TRACKER.md).
+**Status:** Phase 04 — IN PROGRESS, with P04-02 TLS contract and transport verification in review. Phase 03 functional approval is conditional. Full WCAG 2.1 AA verification remains an open public-release gate. See the [phase tracker](SITEPULSE_PHASE_TRACKER.md).
 
 ## Intended outcomes
 - Monitor website availability and HTTP response time with strict SSRF defenses.

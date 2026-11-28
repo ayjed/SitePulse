@@ -1,10 +1,10 @@
 # Phase 02 — Monitor Engine
 
-**Status:** IN PROGRESS
+**Status:** APPROVED (by @ayjed on `2026-11-28`; Phase 03 NOT STARTED)
 
-**Authorized:** `2026-11-27` following maintainer approval of Phase 01 (PR #1 `d3d7ffc`, PR #2 `776333f`, PR #3 `12dbd17`). Tasks 12–15 merged into `main` via PR #4 (`d1d85b8`), PR #5 (`0f29c21`), PR #6 (`57ed871`), and PR #7 (`053ca85`).
+**Authorized:** `2026-11-27` following maintainer approval of Phase 01 (PR #1 `d3d7ffc`, PR #2 `776333f`, PR #3 `12dbd17`). Tasks 12–15 merged into `main` via PR #4 (`d1d85b8`), PR #5 (`0f29c21`), PR #6 (`57ed871`), and PR #7 (`053ca85`). Final Acceptance Audit merged via PR #8 (`91562c61241cd2cf49ac919489db42cb68ac83b1`).
 
-**Current task:** Phase 02 Final Acceptance Audit (`audit/phase-02-final-acceptance`, **IN REVIEW**; Phase 02 remains **IN PROGRESS** pending maintainer approval).
+**Current task:** Closed & **APPROVED** (`2026-11-28` by `@ayjed`). PR #8 merged at `91562c61241cd2cf49ac919489db42cb68ac83b1`; maintainer explicitly accepted the documented `68.92 MiB` SQLite 30-day 1-minute storage variance (vs original `<= 50 MB` target) while keeping the default 30-day retention (`SITEPULSE_HISTORY_RETENTION_DAYS=30`) unchanged. Awaiting formal authorization to begin Phase 03.
 
 ## Scope
 - [x] Monitor CRUD and safe configuration validation (Task 13 **MERGED** via PR #5 `0f29c215573a64786c64208cad2e64b2210e68fd`).
@@ -17,7 +17,7 @@
 - [x] Monitoring scenarios verified with repeatable tests (`SCHED-01`–`SCHED-06`, loopback `curl_multi`, `STATE-01`–`STATE-05`, crash/retry/fencing/reconciliation/TLS/pruning suites passing across SQLite PHP 8.3/8.4 and MySQL 8.0 CI; `283 passed, 1898 assertions`).
 - [x] Private network bypass attempts blocked (`SEC-01`–`SEC-16` passing and verified in concurrent loopback `checkBatch` redirect checks).
 - [x] Failed cron/checks are observable (`check_results`, `incidents`, `incident_notifications`, sanitized logs, and escaped alert emails implemented; Phase 03 dashboard visualization remains unstarted).
-- [ ] Maintainer approves evidence (Audit report: [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](../audits/PHASE_02_FINAL_ACCEPTANCE.md)).
+- [x] Maintainer approves evidence (Approved `2026-11-28` by `@ayjed` following PR #8 merge `91562c61241cd2cf49ac919489db42cb68ac83b1`, including explicit acceptance of the `68.92 MiB` SQLite 1-minute 30-day storage exception; audit report: [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](../audits/PHASE_02_FINAL_ACCEPTANCE.md)).
 
 ## Task 12 — Safe HTTP Client Foundation (`MERGED` via PR #4: `d1d85b8ceae988c36013f3220657a9ed873f3987`)
 - **Merged SHA:** `d1d85b8ceae988c36013f3220657a9ed873f3987` (`2026-11-27T21:15:59Z`; CI runs `46068385086` and `46068377174` passed 6/6 jobs with `224 passed, 965 assertions`).
@@ -71,4 +71,4 @@
   - `tests/Feature/IncidentLifecycleAndAlertsTest.php` (`STATE-01`–`STATE-05`, SMTP failure/retry/crash recovery, stale check guards, pause/URL/delete cleanup, TLS 14d warning/renewal cycle, XSS/credential sanitization, owner-only recipients, `SITEPULSE_ALERTS_ENABLED=false` default)
   - `tests/Feature/NotificationDispatchConcurrencyTest.php` (active claim contention, stale-worker completion & failure fencing, final-attempt stale reconciliation, SMTP crash-window recovery, retry exhaustion, `MonitorCheckRunner`/SMTP decoupling, bounded `--limit`/`--deadline`, overlap lock, independent opt-ins & `config:cache` parity)
   - `tests/Feature/HistoryPruningTest.php` (exact 30-day boundary, chunked SQLite/MySQL-portable deletion, incident/notification preservation, idempotency, CLI validation, overlap lock, opt-in daily schedule)
-  - Empirical audit benchmark (`audit/phase-02-final-acceptance`) measured `68.92 MiB` SQLite WAL footprint for `432,000` 1-minute `check_results` rows over 30 days (exceeding `<= 50 MB` target); Phase 02 remains **IN PROGRESS** pending maintainer acceptance in [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](../audits/PHASE_02_FINAL_ACCEPTANCE.md).
+  - Empirical audit benchmark (`audit/phase-02-final-acceptance`) measured `68.92 MiB` SQLite WAL footprint for `432,000` 1-minute `check_results` rows over 30 days (exceeding `<= 50 MB` target); this variance was explicitly accepted by maintainer `@ayjed` on `2026-11-28` with the default `SITEPULSE_HISTORY_RETENTION_DAYS=30` unchanged; Phase 02 is **APPROVED**; Phase 03 is **NOT STARTED**; full audit and decision record: [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](../audits/PHASE_02_FINAL_ACCEPTANCE.md).

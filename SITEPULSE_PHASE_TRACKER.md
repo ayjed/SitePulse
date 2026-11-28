@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 02 — HTTP monitor engine and persistence  
-**Project status:** IN PROGRESS  
-**Approved by:** @ayjed (Phase 01 approved 2026-11-27)  
-**Approval date:** 2026-11-27  
+**Current phase:** 02 — HTTP monitor engine and persistence (APPROVED; awaiting Phase 03 authorization)
+**Project status:** APPROVED (Phase 02 approved 2026-11-28; Phase 03 NOT STARTED)
+**Approved by:** @ayjed (Phase 01 approved 2026-11-27; Phase 02 approved 2026-11-28)
+**Approval date:** 2026-11-28
 **Last reviewed:** 2026-11-28
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `audit/phase-02-final-acceptance` (from `main` `053ca85d`; `https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `docs/phase-02-approval` (from `main` `91562c61`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -21,7 +21,7 @@
 |---|---|---|---|
 | 00 | Define users, constraints, feasibility, risks | APPROVED | requirements, threat model, technical choices reviewed |
 | 01 | Foundation and local development | APPROVED | clean scaffold, reproducible setup, tests/CI running |
-| 02 | HTTP monitor engine and persistence | IN PROGRESS | scheduled checks, history, security tests |
+| 02 | HTTP monitor engine and persistence | APPROVED | scheduled checks, history, security tests (`68.92 MiB` 1-min SQLite storage exception accepted) |
 | 03 | Accessible dashboard | NOT STARTED | responsive monitoring UI and E2E smoke check |
 | 04 | Alerts, TLS checks, hardening | NOT STARTED | alert deduplication, SSL checks, negative security tests |
 | 05 | Packaging, documentation, public release | NOT STARTED | install verified, license/docs/demo/release checks |
@@ -50,7 +50,7 @@
 - [x] Phase 02 Task 13 (`feat/phase-02-monitor-crud`): Implemented SQLite/MySQL-compatible `monitors` schema, `Monitor` model & factory, `MonitorPolicy`, SSRF-validated CRUD (`SafeHttpClient::validateUrl()`), pause/resume state rules, accessible UI, and `MonitorCrudTest`; merged via PR #5 into `main` at `0f29c215573a64786c64208cad2e64b2210e68fd`.
 - [x] Phase 02 Task 14 (`feat/phase-02-scheduled-engine` -> PR #6): Implemented unchecked `MonitorStatus::UNKNOWN` semantics, persistent `monitors.revision` compare-and-swap stale-result protection, `check_results` schema & batched atomic persistence, bounded concurrent `CurlMultiTransportDriver` + `SafeHttpClient::checkBatch()`, whole-run `hrtime` 45s/50s accounting, `sitepulse:check-monitors`, and opt-in `SITEPULSE_SCHEDULED_CHECKS_ENABLED=false` gating; merged via PR #6 into `main` at `57ed871e06408b6faf748cd86e2a142f821bf099`.
 - [x] Phase 02 Task 15 (`feat/phase-02-incidents-retention` -> PR [#7](https://github.com/ayjed/SitePulse/pull/7)): Implemented SQLite/MySQL-compatible `incidents` (`open_monitor_id` unique lock) & fenced `incident_notifications` outbox/audit schemas (`claim_token`, `claim_version`), $N=2$ / $M=2$ incident lifecycle & pause/resume/URL-change/delete cleanup, decoupled `sitepulse:dispatch-notifications` (`SITEPULSE_ALERTS_ENABLED=false` & `SITEPULSE_SCHEDULED_NOTIFICATIONS_ENABLED=false` opt-in defaults, `--limit`/`--deadline`, overlap lock, crash-safe stale-worker fencing & final-attempt reconciliation outside DB transactions), 14-day repeatable TLS expiry alerts, portable chunked `sitepulse:prune-checks` retention (`SITEPULSE_PRUNE_CHECKS_ENABLED=false`), `IncidentLifecycleAndAlertsTest`, `NotificationDispatchConcurrencyTest`, and `HistoryPruningTest`; merged via PR #7 into `main` at `053ca85dd061e7caa0acea8a79d363c8eb36ddcf`.
-- [ ] Phase 02 Final Acceptance Audit (`audit/phase-02-final-acceptance`): Audited PRs #4–#7, requirements traceability, security matrix, empirical CLI/memory/SQLite WAL/30-day storage/pruning benchmarks, full test suite (`283 passed, 1898 assertions`), and CI (`46134436723` `3/3` PASS) in [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](docs/audits/PHASE_02_FINAL_ACCEPTANCE.md) (**IN REVIEW** — awaiting maintainer approval; Phase 02 remains `IN PROGRESS`, Phase 03 `NOT STARTED`).
+- [x] Phase 02 Final Acceptance Audit (`audit/phase-02-final-acceptance` -> PR [#8](https://github.com/ayjed/SitePulse/pull/8)): Audited PRs #4–#7, requirements traceability, security matrix, empirical CLI/memory/SQLite WAL/30-day storage/pruning benchmarks, full test suite (`283 passed, 1898 assertions`), and CI (`46134436723` `3/3` PASS) in [docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](docs/audits/PHASE_02_FINAL_ACCEPTANCE.md); merged into `main` at `91562c61241cd2cf49ac919489db42cb68ac83b1` (`main` CI `46136782144` `3/3` PASS). Maintainer `@ayjed` explicitly accepted the documented `68.92 MiB` 1-minute 30-day SQLite storage variance (retaining default 30-day retention) and **APPROVED** Phase 02 on `2026-11-28`; Phase 03 remains `NOT STARTED`.
 
 ## Decisions pending
 | ID | Decision | Owner | Status | Due phase | Reference |
@@ -93,7 +93,8 @@
 | 2026-11-27 | 02 | Task 13 (`feat/phase-02-monitor-crud` -> PR #5): Implemented SQLite/MySQL `monitors` schema + indexes + cascade FK, `MonitorStatus` enum, `Monitor` model (strict `$fillable`, telemetry reset on URL change, portable `dueForCheck` scopes), `MonitorPolicy`, `SafeMonitorUrl` + `MonitorConfigurationRequest`, `MonitorController`, accessible Blade CRUD/pause/resume UI, and `MonitorCrudTest` | Merged via PR #5 into `main` at `0f29c215573a64786c64208cad2e64b2210e68fd` | Merged (PR #5) |
 | 2026-11-28 | 02 | Task 14 (`feat/phase-02-scheduled-engine`, PR [#6](https://github.com/ayjed/SitePulse/pull/6)) -> `57ed871e06408b6faf748cd86e2a142f821bf099` (`main`) | Merged via PR #6 into `main` after remediation of whole-run deadlines, synchronous DNS timeout controls, persistent `revision` CAS, and `SITEPULSE_SCHEDULED_CHECKS_ENABLED=false` opt-in scheduler gate | Merged (PR #6) |
 | 2026-11-28 | 02 | Task 15 (`feat/phase-02-incidents-retention`, PR [#7](https://github.com/ayjed/SitePulse/pull/7)) -> `053ca85dd061e7caa0acea8a79d363c8eb36ddcf` (`main`) | Merged via PR #7 (`head_sha: 87be52c`, CI `46133968179` & `46133964903` 6/6 PASS; post-merge `main` CI `46134436723` 3/3 PASS with `283 passed, 1898 assertions`) after remediation of claim fencing tokens, `MonitorCheckRunner`/SMTP decoupling, independent opt-in gates, and stale final-attempt reconciliation | Merged (PR #7) |
-| 2026-11-28 | 02 | Task 16 (`audit/phase-02-final-acceptance` from `053ca85d`): Completed Phase 02 Final Acceptance Audit ([docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](docs/audits/PHASE_02_FINAL_ACCEPTANCE.md)) | Full local suite (`283 passed, 1898 assertions`, `Security`: `159 passed`), isolated 50-monitor loopback & SQLite WAL benchmarks (`40 MB` peak CLI memory @ concurrency 5, `732 ms` runner / `760.76 ms` wall, `2.08x` batch speedup, `14,400`-row prune in `1.12s`, `68.92 MiB` @ 432K 1-min rows exceeding `<= 50 MB` target), documented DNS/DB/SMTP caveats & opt-in safety checks | In Review (Draft Audit PR; Phase 02 IN PROGRESS) |
+| 2026-11-28 | 02 | Task 16 (`audit/phase-02-final-acceptance`, PR [#8](https://github.com/ayjed/SitePulse/pull/8)) -> `91562c61241cd2cf49ac919489db42cb68ac83b1` (`main`): Phase 02 Final Acceptance Audit ([docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](docs/audits/PHASE_02_FINAL_ACCEPTANCE.md)) | Full local suite (`283 passed, 1898 assertions`, `Security`: `159 passed`), isolated 50-monitor loopback & SQLite WAL benchmarks (`40 MB` peak CLI memory @ concurrency 5, `732 ms` runner / `760.76 ms` wall, `2.08x` batch speedup, `14,400`-row prune in `1.12s`, `68.92 MiB` @ 432K 1-min rows exceeding `<= 50 MB` target); merged via PR #8 (`main` CI `46136782144` 3/3 PASS) | Merged (PR #8) |
+| 2026-11-28 | 02 | Formal Phase 02 Approval & Closeout (`docs/phase-02-approval` from `91562c61`): Recorded Maintainer `@ayjed` Phase 02 sign-off and accepted `68.92 MiB` SQLite storage variance | Accepted `68.92 MiB` (vs `<= 50 MB` target for 10 monitors at 1-min intervals for 30 days) with default 30-day retention (`SITEPULSE_HISTORY_RETENTION_DAYS=30`) unchanged; monitoring/alerts/notifications/pruning remain opt-in disabled (`false`); Phase 03 remains `NOT STARTED` | Approved by @ayjed (Draft Approval PR; Phase 02 APPROVED) |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.

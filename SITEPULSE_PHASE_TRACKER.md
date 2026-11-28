@@ -1,13 +1,13 @@
 # SitePulse Master Phase Tracker
 
 **Project:** SitePulse  
-**Current phase:** 03 — Accessible dashboard (P03-01 authorized)
+**Current phase:** 03 — Accessible dashboard (P03-02 authorized)
 **Project status:** IN PROGRESS (Phase 02 approved 2026-11-28)
 **Approved by:** @ayjed (Phase 01 approved 2026-11-27; Phase 02 approved 2026-11-28)
 **Approval date:** 2026-11-28
 **Last reviewed:** 2026-11-28
 **Maintainer:** @ayjed  
-**Git tracking:** Branch `codex/phase-03-dashboard-overview` (from `main` `77070bc`; `https://github.com/ayjed/SitePulse.git`)
+**Git tracking:** Branch `codex/phase-03-history-uptime` (from `main` `dd53fc4`; `https://github.com/ayjed/SitePulse.git`)
 
 ## Status legend
 - `NOT STARTED`: no work approved
@@ -28,7 +28,8 @@
 
 ## Current next actions
 - [x] Merge the Phase 02 documentation closeout via PR #9 (`77070bc5702d976a6b5c1537a98d8e8de4a896e5`). The historical local Windows result was 283 tests / 1,898 assertions. PR #9 CI run `46143650124` recorded 283 tests / 1,904 assertions in each of its three jobs.
-- [ ] Phase 03 P03-01: Review the owner-only monitor status overview and verify the required CI checks. Phase 03 history and incident views remain pending.
+- [x] Phase 03 P03-01: Merge the owner-only monitor status overview via PR #10 (`dd53fc48928697f993f45c4777d2c3ef93114a25`). Final local verification recorded 304 tests / 2,058 assertions. PR CI run `46148897156` recorded 304 tests / 2,064 assertions in each required job.
+- [ ] Phase 03 P03-02: Review the authorized history and observed-check uptime queries and verify the required CI checks.
 - [x] Phase 00 maintainer review and explicit approval (@ayjed).
 - [x] Git remote verified (`https://github.com/ayjed/SitePulse.git`) and branch history synchronized.
 - [x] Development environment audited and resolved (PHP 8.4.28 NTS, Composer 2.11.2, Node `v26.13.0`, npm `11.20.0`).
@@ -98,6 +99,7 @@
 | 2026-11-28 | 02 | Task 16 (`audit/phase-02-final-acceptance`, PR [#8](https://github.com/ayjed/SitePulse/pull/8)) -> `91562c61241cd2cf49ac919489db42cb68ac83b1` (`main`): Phase 02 Final Acceptance Audit ([docs/audits/PHASE_02_FINAL_ACCEPTANCE.md](docs/audits/PHASE_02_FINAL_ACCEPTANCE.md)) | Full local suite (`283 passed, 1898 assertions`, `Security`: `159 passed`), isolated 50-monitor loopback & SQLite WAL benchmarks (`40 MB` peak CLI memory @ concurrency 5, `732 ms` runner / `760.76 ms` wall, `2.08x` batch speedup, `14,400`-row prune in `1.12s`, `68.92 MiB` @ 432K 1-min rows exceeding `<= 50 MB` target); merged via PR #8 (`main` CI `46136782144` 3/3 PASS) | Merged (PR #8) |
 | 2026-11-28 | 02 | Formal Phase 02 Approval & Closeout (`docs/phase-02-approval` from `91562c61`): Recorded Maintainer `@ayjed` Phase 02 sign-off and accepted `68.92 MiB` SQLite storage variance | Accepted `68.92 MiB` (vs `<= 50 MB` target for 10 monitors at 1-min intervals for 30 days) with default 30-day retention (`SITEPULSE_HISTORY_RETENTION_DAYS=30`) unchanged; monitoring/alerts/notifications/pruning remain opt-in disabled (`false`); Phase 03 remains `NOT STARTED` | Approved by @ayjed (Draft Approval PR; Phase 02 APPROVED) |
 | 2026-11-28 | 03 | P03-01 (`codex/phase-03-dashboard-overview`): Owner-only status overview with manual refresh, bounded cursor pagination, and stored last-check and latency data | Local PHP 8.4 / SQLite suite passed (`294` tests, `2,008` assertions), including the overview suite (`11` tests, `110` assertions). Composer validation, lockfile platform check and audit, Pint, `npm ci`, and production build passed. Desktop and mobile preview and keyboard refresh were checked. | In review |
+| 2026-11-28 | 03 | P03-02 (`codex/phase-03-history-uptime`): Owner-authorized uptime, check history, latency samples, and incident history | Local suite passed (`316` tests, `2,174` assertions), including `12` history tests and `116` assertions. Quality checks passed. [Phase 03 benchmark and plans](docs/phases/PHASE_03_DASHBOARD.md#retained-history-benchmark) measure the existing indexes on SQLite and MySQL 8.0 using 432,000 checks per database. | In review |
 
 ## Change approval protocol
 1. Propose task with scope and acceptance criteria.
